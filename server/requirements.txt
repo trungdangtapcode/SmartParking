@@ -1,0 +1,18 @@
+# Core dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Object Detection & Tracking
+# ultralytics includes YOLO with built-in ByteTrack algorithm
+# No need to install byte-track separately!
+ultralytics>=8.0.0
+lap>=0.4.0  # Linear Assignment Problem solver - required for tracking
+
+# Optional: SAM3 (Segment Anything Model 3)
+# Note: SAM3 may require additional setup from GitHub
+# Uncomment and install if you want to use SAM3:
+# git+https://github.com/facebookresearch/segment-anything-3.git
+
+# License Plate Recognition (already installed)
+fast-alpr[onnx]>=0.3.0
+
