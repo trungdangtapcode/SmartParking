@@ -69,20 +69,29 @@ git --version
 
 ### 📝 Các Bước Thực Hiện
 
-#### 1.1. Tạo Project với Vite
+#### 1.1. Setup Project
+
+> **Lưu ý**: Project đã được reorganize với cấu trúc:
+> - `frontend/` - React + TypeScript + Vite app
+> - `docs/` - Tài liệu và hướng dẫn
+> - `scripts/` - Scripts và commands
 
 ```bash
-# Mở terminal/command prompt
-# Di chuyển đến thư mục muốn tạo project
+# Vào thư mục project
 cd D:\SmartParking
 
-# Tạo project với Vite
-npm create vite@latest SmartParking -- --template react-ts
-
-# Di chuyển vào thư mục project
-cd SmartParking
+# Di chuyển vào folder frontend
+cd frontend
 
 # Install dependencies
+npm install
+```
+
+**Nếu muốn tạo project mới từ đầu:**
+```bash
+cd D:\SmartParking
+npm create vite@latest my-new-project -- --template react-ts
+cd my-new-project
 npm install
 ```
 

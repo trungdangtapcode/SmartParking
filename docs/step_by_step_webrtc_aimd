@@ -8,9 +8,9 @@ Camera (WebRTC)
     ↓
 Browser (Live Stream)
     ↓
-AI Model (TensorFlow.js) - Chạy trên browser
+AI Model (Roboflow Custom Model) - Detect qua API
     ↓
-Detect xe real-time
+Detect parking spaces real-time
     ↓
 Firestore (Chỉ lưu kết quả detection)
 ```
@@ -28,7 +28,7 @@ Firestore (Chỉ lưu kết quả detection)
 - [Bước 0: Chuẩn Bị](#bước-0-chuẩn-bị)
 - [Bước 1: Setup Project](#bước-1-setup-project)
 - [Bước 2: Setup Firestore (Chỉ Database)](#bước-2-setup-firestore)
-- [Bước 3: Setup TensorFlow.js](#bước-3-setup-tensorflowjs)
+- [Bước 3: Setup Roboflow AI Model](#bước-3-setup-roboflow-ai-model)
 - [Bước 4: Build WebRTC Live Camera](#bước-4-build-webrtc-live-camera)
 - [Bước 5: Integrate AI Detection](#bước-5-integrate-ai-detection)
 - [Bước 6: Save Results to Firestore](#bước-6-save-results-to-firestore)
@@ -85,8 +85,8 @@ npm install
 # Firebase (CHỈ Firestore, KHÔNG cần Storage)
 npm install firebase
 
-# TensorFlow.js (AI chạy trên browser)
-npm install @tensorflow/tfjs @tensorflow-models/coco-ssd
+# Roboflow AI Detection (Custom model cho parking detection)
+npm install axios
 
 # Chart.js (biểu đồ)
 npm install chart.js react-chartjs-2
@@ -124,9 +124,9 @@ npm run dev
 Mở http://localhost:5173 - Phải thấy trang Vite mặc định.
 
 ### ✅ Checkpoint 1
-- [ ] Project chạy được
-- [ ] Tailwind CSS hoạt động
-- [ ] Không có lỗi
+- [Y] Project chạy được
+- [Y] Tailwind CSS hoạt động
+- [Y] Không có lỗi
 
 ---
 
@@ -239,84 +239,175 @@ npm run dev
 **Kiểm tra Console:** Phải thấy "✅ Firestore connected!"
 
 ### ✅ Checkpoint 2
-- [ ] Firebase project đã tạo
-- [ ] Firestore đã enable
-- [ ] `.env.local` đã có config
-- [ ] Console log "Firestore connected!"
+- [Y] Firebase project đã tạo
+- [Y] Firestore đã enable
+- [Y] `.env.local` đã có config
+- [Y] Console log "Firestore connected!"
 
 ---
 
-## Bước 3: Setup TensorFlow.js
+## Bước 3: Setup Roboflow AI Model
 
-### 3.1. Giải Thích TensorFlow.js
+### 3.1. Giải Thích Roboflow
 
-**TensorFlow.js là gì?**
-- Thư viện AI chạy **TRỰC TIẾP trên browser**
-- Không cần server
-- Detect objects (xe, người, v.v.) real-time
+**Roboflow là gì?**
+- Platform để train **custom AI models**
+- Model đã được train riêng cho **parking detection**
+- Chạy qua API, rất nhanh và chính xác
 
-**COCO-SSD là gì?**
-- Pre-trained model để detect objects
-- Đã học nhận diện 80+ loại objects (car, truck, motorcycle, bus...)
-- Chạy nhanh trên browser
+**Model deteksiparkirkosong:**
+- Custom model train để detect chỗ đỗ xe
+- Classes: `available`, `occupied`, v.v.
+- Độ chính xác cao hơn COCO-SSD cho parking
+- Link: https://universe.roboflow.com/skripsijeremy/deteksiparkirkosong/model/6
 
-### 3.2. Test TensorFlow.js
+### 3.2. Lấy Roboflow API Key
+
+1. Vào https://roboflow.com/ và **Sign Up** (miễn phí)
+2. Vào **Workspace Settings** (icon ⚙️)
+3. Tab **Roboflow API**
+4. Copy **API Key** (dạng: `abc123xyz...`)
+
+### 3.3. Cấu Hình API Key
+
+**File: `env.local`** (UPDATE - thêm vào cuối file)
+
+```env
+# Roboflow API Configuration
+VITE_ROBOFLOW_API_KEY=YOUR_API_KEY_HERE
+VITE_ROBOFLOW_MODEL_ID=deteksiparkirkosong
+VITE_ROBOFLOW_MODEL_VERSION=6
+```
+
+> **LƯU Ý**: Thay `YOUR_API_KEY_HERE` bằng API key thật từ Roboflow!
+
+### 3.4. Tạo AI Detection Service
 
 **File: `src/services/ai/aiDetection.ts`** (TẠO MỚI)
 
 ```typescript
-import * as cocoSsd from '@tensorflow-models/coco-ssd';
-import '@tensorflow/tfjs-backend-webgl';
+import axios from 'axios';
 
 /**
- * Detection Result từ AI
+ * Detection Result từ Roboflow AI
  */
 export interface Detection {
-  class: string;      // 'car', 'truck', 'motorcycle', 'bus'
+  class: string;      // 'available', 'occupied', etc.
   score: number;      // Confidence 0-1
   bbox: [number, number, number, number]; // [x, y, width, height]
 }
 
 /**
- * AI Detection Service
+ * Roboflow API Response
+ */
+interface RoboflowPrediction {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+  class: string;
+}
+
+/**
+ * AI Detection Service using Roboflow
  */
 class AIDetectionService {
-  private model: cocoSsd.ObjectDetection | null = null;
+  private apiKey: string;
+  private modelId: string;
+  private modelVersion: string;
+  private apiUrl: string;
+  private modelLoaded: boolean = false;
   
-  /**
-   * Load AI model (chỉ load 1 lần)
-   */
-  async loadModel(): Promise<void> {
-    if (this.model) return; // Đã load rồi
-    
-    console.log('🤖 Loading AI model...');
-    this.model = await cocoSsd.load();
-    console.log('✅ AI model loaded!');
+  constructor() {
+    this.apiKey = import.meta.env.VITE_ROBOFLOW_API_KEY || '';
+    this.modelId = import.meta.env.VITE_ROBOFLOW_MODEL_ID || 'deteksiparkirkosong';
+    this.modelVersion = import.meta.env.VITE_ROBOFLOW_MODEL_VERSION || '6';
+    this.apiUrl = `https://detect.roboflow.com/${this.modelId}/${this.modelVersion}`;
   }
   
   /**
-   * Detect vehicles trong image/video frame
+   * Load AI model (check credentials)
+   */
+  async loadModel(): Promise<void> {
+    if (this.modelLoaded) return;
+    
+    if (!this.apiKey || this.apiKey === 'YOUR_ROBOFLOW_API_KEY_HERE') {
+      throw new Error('❌ Roboflow API Key not configured!');
+    }
+    
+    console.log('🤖 Roboflow Model Ready!');
+    console.log(`📦 Model: ${this.modelId} v${this.modelVersion}`);
+    this.modelLoaded = true;
+  }
+  
+  /**
+   * Convert video/image to base64
+   */
+  private toBase64(source: HTMLVideoElement | HTMLImageElement): string {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    
+    const width = source instanceof HTMLVideoElement 
+      ? source.videoWidth 
+      : source.naturalWidth;
+    const height = source instanceof HTMLVideoElement 
+      ? source.videoHeight 
+      : source.naturalHeight;
+    
+    canvas.width = width;
+    canvas.height = height;
+    ctx.drawImage(source, 0, 0, width, height);
+    
+    return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+  }
+  
+  /**
+   * Detect parking spaces trong image/video frame
    */
   async detectVehicles(
     source: HTMLVideoElement | HTMLImageElement
   ): Promise<Detection[]> {
-    if (!this.model) {
-      throw new Error('Model not loaded! Call loadModel() first.');
+    if (!this.modelLoaded) {
+      throw new Error('Model not loaded!');
     }
     
-    // Detect tất cả objects
-    const predictions = await this.model.detect(source);
-    
-    // Filter chỉ lấy xe
-    const vehicles = predictions.filter(p => 
-      ['car', 'truck', 'motorcycle', 'bus'].includes(p.class)
-    );
-    
-    return vehicles.map(v => ({
-      class: v.class,
-      score: v.score,
-      bbox: v.bbox
-    }));
+    try {
+      const base64Image = this.toBase64(source);
+      
+      const response = await axios.post(
+        this.apiUrl,
+        base64Image,
+        {
+          params: {
+            api_key: this.apiKey,
+            confidence: 40,
+            overlap: 30
+          },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 5000
+        }
+      );
+      
+      const predictions: RoboflowPrediction[] = response.data.predictions || [];
+      
+      return predictions.map(p => ({
+        class: p.class,
+        score: p.confidence,
+        bbox: [
+          p.x - p.width / 2,
+          p.y - p.height / 2,
+          p.width,
+          p.height
+        ] as [number, number, number, number]
+      }));
+      
+    } catch (error) {
+      console.error('❌ Detection error:', error);
+      return [];
+    }
   }
 }
 
@@ -324,7 +415,7 @@ class AIDetectionService {
 export const aiDetection = new AIDetectionService();
 ```
 
-### 3.3. Test AI Detection
+### 3.5. Test AI Detection
 
 **File: `src/App.tsx`** (UPDATE)
 
@@ -375,13 +466,16 @@ npm run dev
 ```
 
 **Phải thấy:**
-1. "⏳ Loading AI model..." (vài giây)
+1. "⏳ Loading AI model..." (1-2 giây)
 2. Sau đó "✅ AI Model loaded and ready!"
+3. Console log: "🤖 Roboflow Model Ready!"
+
+> **LƯU Ý**: Nếu thấy lỗi "API Key not configured", hãy check lại file `env.local`!
 
 ### ✅ Checkpoint 3
-- [ ] TensorFlow.js installed
-- [ ] AI model load thành công
-- [ ] Console log "AI model loaded!"
+- [Y] Roboflow API key đã config
+- [Y] axios installed
+- [Y] Console log "Roboflow Model Ready!"
 
 ---
 
@@ -539,9 +633,9 @@ npm run dev
 3. Badge "LIVE" đỏ góc trên phải
 
 ### ✅ Checkpoint 4
-- [ ] Webcam bật được
-- [ ] Video hiển thị real-time
-- [ ] Badge "LIVE" xuất hiện
+- [Y] Webcam bật được
+- [Y] Video hiển thị real-time
+- [Y] Badge "LIVE" xuất hiện
 
 ---
 
@@ -751,9 +845,9 @@ npm run dev
 4. FPS counter
 
 ### ✅ Checkpoint 5
-- [ ] AI detect được xe
-- [ ] Bounding boxes hiển thị
-- [ ] Số lượng xe hiển thị chính xác
+- [Y] AI detect được xe
+- [Y] Bounding boxes hiển thị
+- [Y] Số lượng xe hiển thị chính xác
 
 ---
 
@@ -879,9 +973,9 @@ npm run dev
 4. Phải thấy documents mới mỗi 5 giây (khi có xe)
 
 ### ✅ Checkpoint 6
-- [ ] Detections được save vào Firestore
-- [ ] Console log "Saved detection"
-- [ ] Firebase Console hiển thị data
+- [Y] Detections được save vào Firestore
+- [Y] Console log "Saved detection"
+- [Y] Firebase Console hiển thị data
 
 ---
 
@@ -1091,10 +1185,10 @@ export default App;
 ```
 
 ### ✅ Checkpoint 7
-- [ ] Live View hoạt động
-- [ ] History page hiển thị records
-- [ ] Stats page hiển thị thống kê
-- [ ] Navigation hoạt động
+- [Y] Live View hoạt động
+- [Y] History page hiển thị records
+- [Y] Stats page hiển thị thống kê
+- [Y] Navigation hoạt động
 
 ---
 
@@ -1145,10 +1239,16 @@ npm run build
 
 ### Next Steps (Nếu Muốn Nâng Cấp):
 
-1. Thêm alerts (xe đỗ sai chỗ)
+1. ✅ Thêm alerts (xe đỗ sai chỗ) – xem trang 🚨 Alerts + auto log vào Firestore
 2. Export reports (PDF, Excel)
-3. Multiple cameras
-4. Admin authentication
+3. ✅ Multiple cameras – Live View chọn camera + trang 🗺️ Multi Cam
+4. ✅ Admin authentication – Firebase Email/Password + Protected Routes
+
+### 🔧 Feature Configuration
+
+- **Admin Auth**: Tạo Firebase Authentication (Email/Password) user → cấu hình env `VITE_FIREBASE_*` → truy cập `/login`. Coaches History/Stats/Alerts/Multi-cam now require login.
+- **Multiple Cameras**: Chỉnh `frontend/src/config/cameras.ts` để thêm ID/camera mới. Live View dropdown + trang `Multi Cam` sẽ tự cập nhật.
+- **Alerts (xe đỗ sai chỗ)**: Định nghĩa allowed/restricted boxes trong `frontend/src/config/parkingRules.ts`. Khi lưu detection, hệ thống log alert vào collection `parkingAlerts` + hiển thị trên trang 🚨 Alerts. 
 
 ---
 
