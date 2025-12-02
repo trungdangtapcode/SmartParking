@@ -63,7 +63,7 @@ def to_serializable(value: Any):
 
 def process_video_frame_by_frame(
     video_path: str,
-    yolo_model_path: str = "yolov8n.pt",
+    yolo_model_path: str = None,
     frame_skip: int = 1,
     conf_threshold: float = 0.25,
     iou_threshold: float = 0.45,
@@ -74,7 +74,7 @@ def process_video_frame_by_frame(
     
     Args:
         video_path: Path to input video file
-        yolo_model_path: Path to YOLO model file
+        yolo_model_path: Path to YOLO model file (None = auto-detect custom model)
         frame_skip: Process every Nth frame (1 = all frames)
         conf_threshold: Detection confidence threshold
         iou_threshold: IOU threshold for NMS
@@ -83,6 +83,22 @@ def process_video_frame_by_frame(
     Returns:
         Dictionary with tracking results and annotated video
     """
+    # Auto-detect model: prefer custom model if exists, otherwise use default
+    if yolo_model_path is None:
+        script_dir = Path(__file__).parent
+        custom_model_path = script_dir / "yolov8s_car_custom.pt"
+        default_model_path = script_dir / "yolov8n.pt"
+        
+        if custom_model_path.exists():
+            yolo_model_path = str(custom_model_path)
+            print(f"✅ Using custom trained model: {yolo_model_path}", file=sys.stderr)
+        elif default_model_path.exists():
+            yolo_model_path = str(default_model_path)
+            print(f"ℹ️  Using default model: {yolo_model_path}", file=sys.stderr)
+        else:
+            yolo_model_path = "yolov8n.pt"  # Will auto-download
+            print(f"ℹ️  Using default model (will download): {yolo_model_path}", file=sys.stderr)
+    
     # Load YOLO model
     try:
         model = YOLO(yolo_model_path)
@@ -91,6 +107,21 @@ def process_video_frame_by_frame(
             "success": False,
             "error": f"Failed to load YOLO model: {str(e)}"
         }))
+    
+    # Detect model type and adjust classes filter
+    # Custom model (trained for car detection) typically has 1 class (class 0)
+    # COCO models have 80 classes (car=2, motorcycle=3, bus=5, truck=7)
+    num_classes = len(model.names)
+    is_custom_model = num_classes == 1 or "custom" in yolo_model_path.lower()
+    
+    if is_custom_model:
+        # Custom model: detect all classes (usually just class 0 = car)
+        classes_filter = None  # None means detect all classes
+        print(f"ℹ️  Custom model detected ({num_classes} class): detecting all classes", file=sys.stderr)
+    else:
+        # COCO model: filter vehicle classes
+        classes_filter = [2, 3, 5, 7]  # car, motorcycle, bus, truck
+        print(f"ℹ️  COCO model detected ({num_classes} classes): filtering vehicle classes {classes_filter}", file=sys.stderr)
     
     # YOLO (ultralytics) has built-in ByteTrack algorithm
     # No need to initialize separate tracker - YOLO's track() method handles it
@@ -159,14 +190,18 @@ def process_video_frame_by_frame(
         # Run YOLO detection with tracking
         # YOLO's track() method uses built-in ByteTrack algorithm
         # persist=True enables tracking across frames
-        results = model.track(
-            frame,
-            persist=True,  # Enable tracking persistence across frames (uses ByteTrack internally)
-            conf=conf_threshold,
-            iou=iou_threshold,
-            classes=[2, 3, 5, 7],  # car, motorcycle, bus, truck
-            verbose=False
-        )
+        track_kwargs = {
+            "persist": True,  # Enable tracking persistence across frames (uses ByteTrack internally)
+            "conf": conf_threshold,
+            "iou": iou_threshold,
+            "verbose": False
+        }
+        
+        # Only add classes filter if not None (for COCO models)
+        if classes_filter is not None:
+            track_kwargs["classes"] = classes_filter
+        
+        results = model.track(frame, **track_kwargs)
         
         # Extract detections
         detections = []
@@ -366,10 +401,12 @@ def main():
         conf_threshold = payload.get("confThreshold", 0.25)
         iou_threshold = payload.get("iouThreshold", 0.45)
         use_sam3 = payload.get("useSAM3", False) and SAM3_AVAILABLE
+        yolo_model_path = payload.get("yoloModelPath", None)  # None = auto-detect
         
         # Process video
         result = process_video_frame_by_frame(
             video_path=video_path,
+            yolo_model_path=yolo_model_path,
             frame_skip=frame_skip,
             conf_threshold=conf_threshold,
             iou_threshold=iou_threshold,
