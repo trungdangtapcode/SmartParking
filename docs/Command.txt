@@ -1,0 +1,15 @@
+# Dua tu may len git
+git add . //add tat ca file moi
+git add path_file
+
+git commit -m "Pipeline tong quat"
+
+# Dua tu git len github
+git push origin main
+
+
+#Xoa file trong im lang : xoa file, xoa ca trong recyclebin. Cmd khong thong bao gi them 
+if exist path_to_file del /f /q path_to_file 
+
+#Check xem file co ton tai khong
+dir path_to_file

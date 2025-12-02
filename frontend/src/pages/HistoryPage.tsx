@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { format } from 'date-fns';
 import { fetchLatestDetections, updateDetectionRecord, deleteDetection } from '../services/detectionService';
 import { ParkingMap2D } from '../components/ParkingMap2D';
@@ -45,6 +45,10 @@ export function HistoryPage() {
   const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [imageDimensions, setImageDimensions] = useState<{ [key: string]: { width: number; height: number } }>({});
+  
+  // Sort state
+  const [sortBy, setSortBy] = useState<'time' | 'parkingId' | 'cameraId' | 'vehicleCount' | 'updateCount'>('time');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -111,16 +115,7 @@ export function HistoryPage() {
               }
             }).filter((r): r is DetectionRecord => r !== null);
             
-            // Sort by parking (ascending), then by cameraId (ascending)
-            data.sort((a, b) => {
-              const parkingA = (a.parkingId || a.parking || '').toLowerCase();
-              const parkingB = (b.parkingId || b.parking || '').toLowerCase();
-              if (parkingA !== parkingB) {
-                return parkingA.localeCompare(parkingB);
-              }
-              return a.cameraId.localeCompare(b.cameraId);
-            });
-            
+            // Don't sort here - let useMemo handle it
             setRecords(data);
             console.log(`✅ Loaded ${data.length} camera records`);
           } catch (mapError) {
@@ -186,16 +181,7 @@ export function HistoryPage() {
             parkingId: record.parkingId,
           })) as DetectionRecord[];
           
-          // Sort by parking (ascending), then by cameraId (ascending)
-          data.sort((a, b) => {
-            const parkingA = (a.parking || '').toLowerCase();
-            const parkingB = (b.parking || '').toLowerCase();
-            if (parkingA !== parkingB) {
-              return parkingA.localeCompare(parkingB);
-            }
-            return a.cameraId.localeCompare(b.cameraId);
-          });
-          
+          // Don't sort here - let useMemo handle it
           setRecords(data);
         }
         setEditingDocId(null);
@@ -270,16 +256,7 @@ export function HistoryPage() {
               }
             }).filter((r): r is DetectionRecord => r !== null);
             
-            // Sort by parking (ascending), then by cameraId (ascending)
-            data.sort((a, b) => {
-              const parkingA = (a.parking || '').toLowerCase();
-              const parkingB = (b.parking || '').toLowerCase();
-              if (parkingA !== parkingB) {
-                return parkingA.localeCompare(parkingB);
-              }
-              return a.cameraId.localeCompare(b.cameraId);
-            });
-            
+            // Don't sort here - let useMemo handle it
             setRecords(data);
           } else {
             // No records left, set empty array
@@ -295,6 +272,34 @@ export function HistoryPage() {
       alert(`Failed to delete camera. Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
+
+  // Filtered and sorted records
+  const filteredRecords = useMemo(() => {
+    // Apply sorting
+    return [...records].sort((a, b) => {
+      let comparison = 0;
+      
+      switch (sortBy) {
+        case 'time':
+          comparison = a.timestamp.getTime() - b.timestamp.getTime();
+          break;
+        case 'parkingId':
+          comparison = (a.parkingId || a.parking || '').localeCompare(b.parkingId || b.parking || '');
+          break;
+        case 'cameraId':
+          comparison = a.cameraId.localeCompare(b.cameraId);
+          break;
+        case 'vehicleCount':
+          comparison = a.vehicleCount - b.vehicleCount;
+          break;
+        case 'updateCount':
+          comparison = (a.updateCount || 0) - (b.updateCount || 0);
+          break;
+      }
+      
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
+  }, [records, sortBy, sortOrder]);
 
   const handleDetectMore = async () => {
     if (!editingImageUrl) {
@@ -371,9 +376,46 @@ export function HistoryPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto bg-gray-50 min-h-screen">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">
-        📊 Detection History
-      </h1>
+      <div className="flex justify-between items-center flex-wrap gap-3 mb-6">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-800">
+            📊 Detection History
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Danh sách các lần phát hiện đã lưu vào hệ thống.
+          </p>
+        </div>
+        <div className="flex gap-2 items-center">
+          <span className="text-sm text-gray-600">Sort:</span>
+          <select
+            value={sortBy}
+            onChange={(e) => {
+              const newSortBy = e.target.value as typeof sortBy;
+              setSortBy(newSortBy);
+              // Set default sort order based on field
+              if (newSortBy === 'time' || newSortBy === 'vehicleCount' || newSortBy === 'updateCount') {
+                setSortOrder('desc');
+              } else {
+                setSortOrder('asc');
+              }
+            }}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="time">Thời gian</option>
+            <option value="parkingId">ID Bãi</option>
+            <option value="cameraId">ID Cam</option>
+            <option value="vehicleCount">Số lượng</option>
+            <option value="updateCount">Số lần cập nhật</option>
+          </select>
+          <button
+            onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+            title={`Sort ${sortOrder === 'asc' ? 'Tăng dần' : 'Giảm dần'}`}
+          >
+            {sortOrder === 'asc' ? '↑' : '↓'}
+          </button>
+        </div>
+      </div>
       
       {/* Warning if records missing images */}
       {recordsWithoutImages.length > 0 && (
@@ -507,7 +549,7 @@ export function HistoryPage() {
                 </div>
               </div>
               <div>
-                {records.map((record) => (
+                {filteredRecords.map((record) => (
                   <div
                     key={record.id}
                     className="grid border-b border-gray-200 hover:bg-gray-50 transition-colors"
@@ -636,7 +678,7 @@ export function HistoryPage() {
 
           {/* Mobile friendly cards */}
           <div className="lg:hidden space-y-4">
-            {records.map((record) => (
+            {filteredRecords.map((record) => (
               <div key={record.id} className="bg-white border border-gray-200 rounded-2xl shadow p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
