@@ -315,7 +315,7 @@ export function HistoryPage() {
         img.onerror = reject;
       });
 
-      const detections = await aiDetection.detectVehicles(img);
+      const detections = await aiDetection.detectParkingSpaces(img);
       const newSpaces: ParkingSpace[] = detections.map((d, i) => ({
         id: `space-${Date.now()}-${i}`,
         bbox: d.bbox,

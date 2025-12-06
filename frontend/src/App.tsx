@@ -10,10 +10,11 @@ import { RegisterPage } from './pages/RegisterPage';
 import { AccountPage } from './pages/AccountPage';
 import { StreamHostPage } from './pages/StreamHostPage';
 import { MultiStreamHostPage } from './pages/MultiStreamHostPage';
-import { StreamViewerPage } from './pages/StreamViewerPage';
+import { StreamViewerPageESP32 as StreamViewerPage } from './pages/StreamViewerPageESP32';
 import { MultiStreamViewerPage } from './pages/MultiStreamViewerPage';
 import { PlateHistoryPage } from './pages/PlateHistoryPage';
 import { ObjectTrackingPage } from './pages/ObjectTrackingPage';
+import { ParkingLotManagementPage } from './pages/ParkingLotManagementPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
 
@@ -198,7 +199,24 @@ function App() {
                 </NavLink>
               )}
 
-              {/* 10. Object Tracking */}
+              {/* 10. Parking Lot Management */}
+              {user && role === 'admin' && (
+                <NavLink
+                  to="/parking-lots"
+                  className={({ isActive }) =>
+                    `flex items-center ${sidebarOpen ? 'gap-3 px-4' : 'justify-center px-2'} py-3 rounded-lg font-medium transition-all ${
+                      isActive
+                        ? 'bg-purple-200 text-purple-900 border border-purple-500 shadow-inner'
+                        : 'bg-white text-purple-700 border border-purple-100 hover:bg-purple-50'
+                    }`
+                  }
+                >
+                  <span className="text-xl flex-shrink-0">🏢</span>
+                  {sidebarOpen && <span className="truncate">Parking Lots</span>}
+                </NavLink>
+              )}
+
+              {/* 11. Object Tracking */}
               {user && (
                 <NavLink
                   to="/tracking"
@@ -215,7 +233,7 @@ function App() {
                 </NavLink>
               )}
 
-              {/* 11. Account */}
+              {/* 12. Account */}
               {user && (
                 <NavLink
                   to="/account"
@@ -382,6 +400,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <ObjectTrackingPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/parking-lots" 
+            element={
+              <ProtectedRoute roles={['admin']}>
+                <ParkingLotManagementPage />
               </ProtectedRoute>
             } 
           />

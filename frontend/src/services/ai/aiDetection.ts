@@ -2,6 +2,9 @@ import axios from 'axios';
 
 /**
  * Detection Result từ Roboflow AI
+ * 
+ * PHASE 1 (Tiền xử lý): Dùng để detect parking spaces (chỗ đỗ xe)
+ * PHASE 2 (Vận hành): Dùng để detect vehicles (xe thật sự) - TBD
  */
 export interface Detection {
   class: string;      // 'available', 'occupied', etc.
@@ -79,9 +82,13 @@ class AIDetectionService {
   }
   
   /**
-   * Detect parking spaces trong image/video frame
+   * PHASE 1: Detect parking spaces (Tiền xử lý - Define chỗ đỗ xe)
+   * Dùng để xác định vị trí các parking slots trong bãi đỗ
+   * 
+   * Note: Chức năng này dùng để DEFINE parking spaces, không phải detect vehicles!
+   * Sau khi có spaces, mới dùng để so sánh với vehicles detected (Phase 2)
    */
-  async detectVehicles(
+  async detectParkingSpaces(
     source: HTMLVideoElement | HTMLImageElement
   ): Promise<Detection[]> {
     if (!this.modelLoaded) {

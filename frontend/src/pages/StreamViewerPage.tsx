@@ -6,7 +6,7 @@ import {
   createHighQualityAnswer,
 } from '../utils/webrtcQuality';
 
-const SIGNALING_URL = 'ws://localhost:3001';
+const STREAM_URL = 'http://localhost:8000/stream';
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 const PARKING_ID_REGEX = /^[A-Za-z0-9]+$/;
 
@@ -370,20 +370,10 @@ export function StreamViewerPage() {
 
         {/* Video Display */}
         <div className="mb-4">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full rounded-lg bg-black aspect-video"
-            controls
-            onLoadedMetadata={() => {
-              if (videoRef.current) {
-                videoRef.current.play().catch((err) => {
-                  console.error('Auto-play prevented:', err);
-                });
-              }
-            }}
+          <img 
+            src="http://localhost:8000/stream" 
+            alt="ESP32 Stream"
+            style={{ width: '100%', height: 'auto' }}
           />
         </div>
 

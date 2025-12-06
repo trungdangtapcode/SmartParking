@@ -1,0 +1,189 @@
+# 📹 SAMPLE VIDEO SOURCES
+
+Nếu bạn chưa có video để test, tải từ các nguồn free dưới đây:
+
+## 🎬 FREE VIDEO SOURCES
+
+### 1. Pexels (Recommended) ⭐
+**URL:** https://www.pexels.com/search/videos/parking/
+
+**Top Videos:**
+- "Parking Lot Time Lapse" - https://www.pexels.com/video/parking-lot-time-lapse-2022396/
+- "Cars in Parking Lot" - https://www.pexels.com/video/cars-in-parking-lot-3044127/
+- "Aerial View Parking" - https://www.pexels.com/video/aerial-view-of-parking-lot-2491284/
+
+**Download:**
+```bash
+# Click video → "Free Download" → Select quality → Save as parking_a.mp4
+```
+
+### 2. Pixabay
+**URL:** https://pixabay.com/videos/search/parking%20lot/
+
+**Download:**
+```bash
+# Click video → "Free Download" → Choose size → Save
+```
+
+### 3. Videvo
+**URL:** https://www.videvo.net/search/parking/
+
+**Download:**
+```bash
+# Click video → "Download" → Select quality
+```
+
+### 4. Coverr
+**URL:** https://coverr.co/search?q=parking
+
+**Download:**
+```bash
+# Click video → "Free Download"
+```
+
+---
+
+## 📥 DOWNLOAD & SETUP
+
+### Quick Setup (3 bước):
+
+```bash
+# 1. Download 3 videos từ Pexels
+# 2. Rename thành:
+#    - parking_a.mp4
+#    - parking_b.mp4
+#    - parking_c.mp4
+# 3. Copy vào server/stream/
+
+cd F:\KHKT2025\AIIII\WEB\SmartParking\server\stream
+copy C:\Users\hmt\Downloads\video1.mp4 parking_a.mp4
+copy C:\Users\hmt\Downloads\video2.mp4 parking_b.mp4
+copy C:\Users\hmt\Downloads\video3.mp4 parking_c.mp4
+```
+
+---
+
+## 🎨 RECOMMENDED VIDEO SPECS
+
+### For Testing:
+- **Resolution:** 1280x720 (720p)
+- **FPS:** 25-30
+- **Duration:** 10-30 seconds (sẽ loop)
+- **Size:** < 50MB
+- **Format:** MP4 (H.264)
+
+### For Demo:
+- **Resolution:** 640x480 hoặc 854x480
+- **FPS:** 15-20
+- **Duration:** 5-15 seconds
+- **Size:** < 10MB
+- **Format:** MP4 (H.264)
+
+---
+
+## 🔄 CONVERT VIDEO (if needed)
+
+Nếu video của bạn quá lớn hoặc format không đúng:
+
+### Using FFmpeg:
+
+```bash
+# Convert to 720p MP4 H.264
+ffmpeg -i input.avi -vf "scale=1280:720" -c:v libx264 -preset fast -crf 23 parking_a.mp4
+
+# Convert to 480p (smaller size)
+ffmpeg -i input.mp4 -vf "scale=640:480" -c:v libx264 -preset fast -crf 23 parking_b.mp4
+
+# Reduce file size (lower quality)
+ffmpeg -i input.mp4 -vf "scale=640:480" -c:v libx264 -crf 28 -r 15 parking_c.mp4
+
+# Extract clip (first 30 seconds)
+ffmpeg -i input.mp4 -ss 00:00:00 -t 00:00:30 -c copy parking_d.mp4
+```
+
+### Online Tools:
+- **CloudConvert:** https://cloudconvert.com/mp4-converter
+- **Online-Convert:** https://www.online-convert.com/
+- **Convertio:** https://convertio.co/video-converter/
+
+---
+
+## 📂 EXAMPLE STRUCTURE
+
+```
+server/stream/
+├── README.md
+├── sample_videos.txt          (this file)
+├── .gitkeep
+├── parking_a.mp4              ⬅️ Your video 1
+├── parking_b.mp4              ⬅️ Your video 2
+└── parking_c.mp4              ⬅️ Your video 3
+```
+
+---
+
+## 🧪 TEST VIDEOS
+
+### Option 1: Real Parking Lot Videos
+Best cho AI testing (car detection, tracking)
+
+### Option 2: Any Video
+Nếu chỉ test streaming, dùng video gì cũng được:
+- Sample video từ Windows: `C:\Windows\Media\*`
+- Video từ điện thoại
+- Screen recording
+
+### Option 3: Generate Test Video
+```bash
+# Tạo video test với FFmpeg (màu xanh, 10s)
+ffmpeg -f lavfi -i color=c=blue:s=1280x720:d=10 -vf "drawtext=text='Test Video':fontsize=50:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2" test.mp4
+```
+
+---
+
+## ⚠️ IMPORTANT NOTES
+
+1. **Copyright:** Chỉ dùng video có license free
+2. **Privacy:** Không dùng video có mặt người thật (nếu deploy công khai)
+3. **Size:** Video càng nhỏ càng tốt cho testing
+4. **Loop:** Video sẽ tự động loop khi hết
+
+---
+
+## 🎯 RECOMMENDED WORKFLOW
+
+### For Development:
+1. Download 1 video nhỏ (< 10MB) cho test nhanh
+2. Test với video đó trước
+3. Sau đó thêm nhiều video khác nếu cần
+
+### For Demo:
+1. Download 3 video khác nhau (different scenes)
+2. Convert về cùng resolution (720p)
+3. Rename theo format: `parking_a.mp4`, `parking_b.mp4`, `parking_c.mp4`
+
+### For Production:
+1. Không dùng video files
+2. Dùng ESP32-CAM thật
+
+---
+
+## 📞 SUPPORT
+
+**Không download được video?**
+- Thử nguồn khác (Pexels, Pixabay, etc.)
+- Hoặc dùng video có sẵn từ điện thoại
+
+**Video không play được?**
+- Convert sang MP4 H.264 bằng FFmpeg
+- Test video bằng VLC player trước
+
+**Video quá lớn?**
+- Convert xuống 480p hoặc 720p
+- Giảm FPS xuống 15-20
+- Tăng CRF (23 → 28)
+
+---
+
+**Happy Video Testing! 🎬🚀**
+

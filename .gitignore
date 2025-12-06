@@ -1,52 +1,63 @@
-# Dependencies
-node_modules/
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
+# Root level .gitignore
 
-# Build outputs
-dist/
-build/
+# Logs
 *.log
-*.local
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
+logs/
 
 # OS
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# Frontend specific
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/build/
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Backup folders
-*_backup/
-backup/
+# Environment variables
+.env
+.env.local
+.env.*.local
 
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# Dependencies
+node_modules/
 
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+
+# Firebase credentials
+firebase_credentials.json
+serviceAccountKey.json
+
+# Build outputs
+dist/
+build/
+
+# AI Models (large files - use Git LFS if needed)
+*.pt
+*.pth
+*.onnx
+!yolov8n.pt
+# Allow yolov8n.pt (small default model)
+# Block custom models:
+*_custom.pt
+yolov8s_car_custom.pt
+
+# Video files for testing (very large)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.webm
+test_video.*
+mock_video.*
+
+# Temporary
+*.tmp
+*.temp

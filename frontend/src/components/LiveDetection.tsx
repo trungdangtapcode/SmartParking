@@ -11,7 +11,10 @@ import {
   downloadDetectionsAsJSON,
   fetchDetectionByCamera,
   type SavedSpace,
+  type DetectionRecord,
 } from '../services/detectionService';
+import { getParkingLotsByOwner, getParkingLot } from '../services/parkingLotService';
+import type { ParkingLot } from '../types/parkingLot.types';
 import { useAuth } from '../context/AuthContext';
 
 interface LiveDetectionProps {
@@ -22,6 +25,80 @@ interface LiveDetectionProps {
 }
 
 type ParkingSpace = SavedSpace;
+
+/**
+ * Component to display detection image with bounding boxes
+ */
+function DetectionImageWithBoxes({ 
+  imageUrl, 
+  spaces, 
+  maxHeight 
+}: { 
+  imageUrl: string; 
+  spaces: SavedSpace[]; 
+  maxHeight: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      // Set canvas size to match image
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+
+      // Draw image
+      ctx.drawImage(img, 0, 0);
+
+      // Draw bounding boxes
+      spaces.forEach((space, index) => {
+        const [x, y, width, height] = space.bbox;
+
+        // Draw box
+        ctx.strokeStyle = '#10b981'; // green-500
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, width, height);
+
+        // Draw label background
+        ctx.fillStyle = '#10b981';
+        ctx.fillRect(x, y - 20, 60, 20);
+
+        // Draw label text
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 12px Arial';
+        ctx.fillText(`#${index + 1}`, x + 5, y - 6);
+      });
+    };
+    img.src = imageUrl;
+    if (imgRef.current) {
+      imgRef.current = img;
+    }
+  }, [imageUrl, spaces]);
+
+  return (
+    <div className="relative w-full">
+      <canvas
+        ref={canvasRef}
+        className="w-full h-auto"
+        style={{ maxHeight: `${maxHeight}px`, objectFit: 'contain' }}
+      />
+      <img
+        ref={imgRef}
+        src={imageUrl}
+        alt="Detection"
+        className="hidden"
+      />
+    </div>
+  );
+}
 
 export function LiveDetection({ videoElement, onStreamReady, sourceType, onMediaReady }: LiveDetectionProps) {
   const { user, role } = useAuth();
@@ -41,6 +118,17 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
   const [parkingIdError, setParkingIdError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
+  
+  // Parking lots dropdown
+  const [parkingLots, setParkingLots] = useState<ParkingLot[]>([]);
+  const [loadingParkingLots, setLoadingParkingLots] = useState(false);
+  
+  // Other cameras' detections for comparison
+  const [otherCamerasDetections, setOtherCamerasDetections] = useState<Array<{
+    cameraId: string;
+    detection: DetectionRecord;
+  }>>([]);
+  const [loadingOtherDetections, setLoadingOtherDetections] = useState(false);
   const activeCameraId = cameraId.trim();
   const canSaveResults =
     isAdmin &&
@@ -123,6 +211,63 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
     }
     return sourceImageUrl;
   };
+
+  // Load parking lots on mount
+  useEffect(() => {
+    if (!ownerId) return;
+    
+    const loadParkingLots = async () => {
+      setLoadingParkingLots(true);
+      try {
+        const lots = await getParkingLotsByOwner(ownerId);
+        setParkingLots(lots);
+      } catch (error) {
+        console.error('Error loading parking lots:', error);
+      } finally {
+        setLoadingParkingLots(false);
+      }
+    };
+    
+    loadParkingLots();
+  }, [ownerId]);
+
+  // Load other cameras' detections when parking lot or camera changes
+  useEffect(() => {
+    if (!parkingLotId || !activeCameraId || !ownerId) {
+      setOtherCamerasDetections([]);
+      return;
+    }
+    
+    const loadOtherDetections = async () => {
+      setLoadingOtherDetections(true);
+      try {
+        const parkingLot = await getParkingLot(parkingLotId);
+        if (!parkingLot) {
+          setOtherCamerasDetections([]);
+          return;
+        }
+        
+        // Get detections from other cameras in the same parking lot
+        const otherCameras = parkingLot.cameras.filter(cam => cam !== activeCameraId);
+        const detections: Array<{ cameraId: string; detection: DetectionRecord }> = [];
+        
+        for (const camId of otherCameras) {
+          const record = await fetchDetectionByCamera(ownerId, camId);
+          if (record && record.spaces && record.spaces.length > 0) {
+            detections.push({ cameraId: camId, detection: record });
+          }
+        }
+        
+        setOtherCamerasDetections(detections);
+      } catch (error) {
+        console.error('Error loading other cameras detections:', error);
+      } finally {
+        setLoadingOtherDetections(false);
+      }
+    };
+    
+    loadOtherDetections();
+  }, [parkingLotId, activeCameraId, ownerId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -234,7 +379,8 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
   }, [historyIndex, history]);
   
   /**
-   * Run detection ONCE when button is clicked
+   * PHASE 1: Define Parking Spaces (Tiền xử lý)
+   * Run detection ONCE when button is clicked to define parking slot locations
    */
   const handleDetect = async () => {
     if (!videoElement) {
@@ -245,8 +391,8 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
     setIsDetecting(true);
       
       try {
-      // 1. Detect parking spaces
-      const detections = await aiDetection.detectVehicles(videoElement);
+      // 1. Detect parking spaces (Phase 1: Define slots)
+      const detections = await aiDetection.detectParkingSpaces(videoElement);
       
       // 2. Convert to ParkingSpace format (ignore class, only keep bbox and confidence)
       const detectedSpaces: ParkingSpace[] = detections.map((d, i) => ({
@@ -259,10 +405,6 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
       saveToHistory(detectedSpaces);
         
       // 3. Load original image
-      const isVideo = videoElement instanceof HTMLVideoElement;
-      const mediaWidth = isVideo ? videoElement.videoWidth : videoElement.naturalWidth;
-      const mediaHeight = isVideo ? videoElement.videoHeight : videoElement.naturalHeight;
-      
       // Create image snapshot from media (always via canvas) để lưu dạng data URL ổn định
       const img = new Image();
       const sizedSnapshot = generateSizedSnapshot(videoElement);
@@ -655,19 +797,28 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Parking Lot ID
+              Parking Lot
             </label>
-            <input
-              type="text"
+            <select
               value={parkingLotId}
               onChange={(e) => {
-                const sanitized = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                setParkingLotId(sanitized);
-                setParkingIdError(sanitized.length === 0 ? 'Parking Lot ID bắt buộc' : null);
+                const selectedId = e.target.value;
+                setParkingLotId(selectedId);
+                setParkingIdError(selectedId.length === 0 ? 'Vui lòng chọn bãi đỗ xe' : null);
               }}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 tracking-wide uppercase"
-              maxLength={24}
-            />
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={loadingParkingLots}
+            >
+              <option value="">-- Chọn bãi đỗ xe --</option>
+              {parkingLots.map((lot) => (
+                <option key={lot.id} value={lot.id}>
+                  {lot.name} ({lot.id})
+                </option>
+              ))}
+            </select>
+            {loadingParkingLots && (
+              <p className="text-xs text-gray-500 mt-1">Đang tải danh sách bãi đỗ...</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
@@ -697,6 +848,71 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
           </div>
         )}
       </div>
+
+      {/* Other Cameras Detections for Comparison */}
+      {otherCamerasDetections.length > 0 && activeCameraId && (
+        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xl">🔍</span>
+            <h3 className="text-lg font-semibold text-gray-800">
+              So sánh với các camera khác ({otherCamerasDetections.length})
+            </h3>
+          </div>
+          <p className="text-sm text-gray-600 mb-4">
+            Xem các spaces đã được detect từ cameras khác trong cùng bãi đỗ. Xóa các spaces bị trùng để tránh duplicate!
+          </p>
+          
+          {loadingOtherDetections ? (
+            <div className="text-center py-4">
+              <div className="text-2xl mb-2">⏳</div>
+              <div className="text-sm text-gray-600">Đang tải detections...</div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {otherCamerasDetections.map(({ cameraId: otherCamId, detection }) => (
+                <div
+                  key={otherCamId}
+                  className="bg-white rounded-lg border-2 border-yellow-400 p-3 shadow-md"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">📹</span>
+                      <span className="font-bold text-gray-800">{otherCamId}</span>
+                    </div>
+                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-semibold">
+                      {detection.spaces?.length || 0} spaces
+                    </span>
+                  </div>
+                  
+                  {detection.inputImageUrl ? (
+                    <div className="relative bg-black rounded-lg overflow-hidden mb-2">
+                      <DetectionImageWithBoxes
+                        imageUrl={detection.inputImageUrl}
+                        spaces={detection.spaces || []}
+                        maxHeight={200}
+                      />
+                      <div className="absolute top-2 right-2 bg-green-600 text-white px-2 py-1 rounded text-xs font-bold z-10">
+                        {detection.spaces?.length || 0} spaces
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-100 rounded-lg p-8 text-center mb-2">
+                      <div className="text-2xl mb-2">📷</div>
+                      <div className="text-xs text-gray-500">Không có ảnh</div>
+                    </div>
+                  )}
+                  
+                  <div className="text-xs text-gray-600">
+                    <div>Parking: {detection.parkingId || 'N/A'}</div>
+                    <div>Updated: {detection.timestamp?.toDate().toLocaleString('vi-VN') || 'N/A'}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Instructions */}
       <div className="text-center text-gray-700">
         <p className="text-base mb-2">

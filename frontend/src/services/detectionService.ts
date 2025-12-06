@@ -13,7 +13,8 @@ import {
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import type { Detection } from './ai/aiDetection';
-import { createAlertsForDetections } from './alertService';
+import { addCameraToParkingLot, updateTotalSpaces } from './parkingLotService';
+// Note: Alerts handled by tracking system, not during space definition
 
 export interface SavedSpace {
   id: string;
@@ -49,10 +50,14 @@ const DETECTION_COLLECTION = 'detections';
 const buildDocId = (ownerId: string, cameraId: string) => `${ownerId}__${cameraId}`;
 
 /**
- * Save or update detection results to Firestore (only latest per camera per owner)
+ * Save parking spaces definition to Firestore (only latest per camera per owner)
+ * 
+ * PHASE 1 ONLY: Define parking spaces → Lưu vào field "spaces"
+ * 
+ * Note: Vehicle tracking sẽ được xử lý riêng bằng tracking system (không lưu vào đây)
  */
 export async function saveDetectionRecord(
-  vehicles: Detection[],
+  detectedSpaces: Detection[],
   cameraId: string,
   inputImageUrl: string | undefined,
   spaces: SavedSpace[] | undefined,
@@ -65,8 +70,8 @@ export async function saveDetectionRecord(
     if (!options?.ownerId) {
       throw new Error('Owner ID is required to save detections.');
     }
-    if (!vehicles || vehicles.length === 0) {
-      return { success: false, error: 'No vehicles to save' };
+    if (!detectedSpaces || detectedSpaces.length === 0) {
+      return { success: false, error: 'No parking spaces to save' };
     }
 
     const docId = buildDocId(options.ownerId, cameraId);
@@ -74,47 +79,48 @@ export async function saveDetectionRecord(
     const existingDoc = await getDoc(docRef);
     const currentUpdateCount = existingDoc.exists() ? existingDoc.data().updateCount || 0 : 0;
 
+    // Convert detected spaces to SavedSpace format
+    const finalSpaces: SavedSpace[] = spaces || detectedSpaces.map((d, i) => ({
+      id: `space-${Date.now()}-${i}`,
+      bbox: d.bbox || [0, 0, 0, 0],
+      confidence: d.score || 0,
+    }));
+
     await setDoc(
       docRef,
       {
         timestamp: Timestamp.now(),
         ownerId: options.ownerId,
-        vehicleCount: vehicles.length,
-        vehicles: vehicles.map((v) => ({
-          type: v.class || 'parking_space',
-          confidence: v.score || 0,
-          bbox: v.bbox || [0, 0, 0, 0],
-        })),
         cameraId,
         parkingId: options.parkingId,
         parking: options.parkingId, // backward compatibility
         inputImageUrl: inputImageUrl || null,
-        spaces:
-          spaces ||
-          vehicles.map((v, i) => ({
-            id: `space-${Date.now()}-${i}`,
-            bbox: v.bbox || [0, 0, 0, 0],
-            confidence: v.score || 0,
-          })),
+        // PHASE 1: Parking spaces (chỗ đỗ xe được định nghĩa)
+        spaces: finalSpaces,
+        spaceCount: finalSpaces.length,
         updateCount: currentUpdateCount + 1,
       },
       { merge: false },
     );
 
-    let alertsCreated = 0;
+    // AUTO-UPDATE PARKING LOT: Add camera and update total spaces
     try {
-      const alertResult = await createAlertsForDetections({
-        ownerId: options.ownerId,
-        cameraId,
-        parkingId: options.parkingId,
-        vehicles,
-      });
-      alertsCreated = alertResult.created;
-    } catch (alertError) {
-      console.error('⚠️ Failed to create parking alerts:', alertError);
+      // Add camera to parking lot (nếu chưa có)
+      await addCameraToParkingLot(options.parkingId, cameraId);
+      
+      // Calculate and update total spaces
+      await updateTotalSpaces(options.parkingId, options.ownerId);
+      
+      console.log(`✅ Auto-updated parking lot ${options.parkingId} with camera ${cameraId}`);
+    } catch (parkingLotError) {
+      console.warn('⚠️ Failed to auto-update parking lot:', parkingLotError);
+      // Continue anyway - detection saved successfully
     }
 
-    return { success: true, docId, alertsCreated };
+    // Note: Parking violation alerts will be handled by tracking system
+    // No alerts created during space definition phase
+    
+    return { success: true, docId, alertsCreated: 0 };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error('❌ Failed to save detection:', errorMessage, error);
@@ -228,6 +234,10 @@ export async function fetchDetectionByCamera(ownerId: string, cameraId: string):
   return { id: docId, ...snapshot.data() } as DetectionRecord;
 }
 
+/**
+ * Update parking spaces for an existing camera record
+ * Only updates spaces, not vehicles (vehicles handled by tracking system)
+ */
 export async function updateDetectionRecord(
   docId: string,
   spaces: SavedSpace[],
@@ -250,13 +260,8 @@ export async function updateDetectionRecord(
     await setDoc(docRef, {
       ...currentData,
       timestamp: Timestamp.now(),
-      vehicleCount: spaces.length,
-      vehicles: spaces.map(s => ({
-        type: 'parking_space',
-        confidence: s.confidence,
-        bbox: s.bbox
-      })),
       spaces,
+      spaceCount: spaces.length,
       inputImageUrl: inputImageUrl !== undefined ? inputImageUrl : currentData.inputImageUrl,
       updateCount: (currentData.updateCount || 0) + 1
     }, { merge: false });

@@ -1,0 +1,50 @@
+# Conda Environment cho SmartParking FastAPI Backend
+# Usage: conda env create -f environment.yml
+
+name: smartparking
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python version
+  - python=3.10
+
+  # ========== Core packages từ conda ==========
+  - numpy>=1.26.0
+  - opencv=4.8.1
+  - pip
+  
+  # ========== Optional: PyTorch with CUDA (nếu có GPU NVIDIA) ==========
+  # Uncomment dòng dưới nếu có GPU và muốn dùng CUDA
+  # - pytorch>=2.0.0
+  # - torchvision>=0.15.0
+  # - pytorch-cuda=11.8  # hoặc 12.1 tùy CUDA version
+  
+  # ========== Hoặc PyTorch CPU-only (nếu không có GPU) ==========
+  - pytorch-cpu
+  - torchvision-cpu
+  
+  # ========== Packages cài qua pip ==========
+  - pip:
+      # Web Framework
+      - fastapi==0.104.1
+      - uvicorn[standard]==0.24.0
+      - python-multipart==0.0.6
+      - aiohttp==3.9.0
+      - websockets==12.0
+      
+      # AI/ML (không có trên conda hoặc phiên bản pip mới hơn)
+      - ultralytics>=8.0.0
+      - lap>=0.4.0
+      - fast-alpr[onnx]>=0.3.0
+      
+      # Firebase
+      - firebase-admin==6.2.0
+      
+      # Development tools (optional)
+      # - pytest==7.4.3
+      # - black==23.12.0
+      # - flake8==6.1.0
+
