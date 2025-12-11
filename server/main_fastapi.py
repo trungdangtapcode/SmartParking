@@ -376,10 +376,16 @@ async def get_esp32_snapshot():
 @app.get("/api/stream/snapshot")
 async def get_stream_snapshot(
     mode: str = Query(default="video_file", description="Stream mode: video_file"),
-    file: str = Query(default=None, description="Video filename")
+    file: str = Query(default=None, description="Video filename"),
+    quality: str = Query(default="high", description="Quality: 'high' (original, PNG) or 'low' (640x480, JPEG)")
 ):
     """
     Lấy 1 frame snapshot từ video file stream để OCR/processing
+    
+    Args:
+        quality: 
+            - 'high': Lấy frame gốc từ video (không resize, PNG format) - TỐT NHẤT cho OCR
+            - 'low': Resize 640x480, JPEG quality 85 - Cho stream preview
     """
     try:
         import base64
@@ -422,21 +428,37 @@ async def get_stream_snapshot(
         if not ret or frame is None:
             raise HTTPException(status_code=500, detail="Failed to read frame from video")
         
-        # Resize if needed
-        frame = cv2.resize(frame, (640, 480))
-        
-        # Encode as JPEG
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not ret:
-            raise HTTPException(status_code=500, detail="Failed to encode frame")
-        
-        # Convert to base64
-        image_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
-        
-        return {
-            "success": True,
-            "imageData": f"data:image/jpeg;base64,{image_b64}"
-        }
+        # Quality mode: 'high' = original frame (PNG), 'low' = resized (JPEG)
+        if quality == "high":
+            # Lấy frame gốc - KHÔNG resize, KHÔNG nén JPEG
+            # Encode as PNG (lossless)
+            ret, buffer = cv2.imencode('.png', frame)
+            if not ret:
+                raise HTTPException(status_code=500, detail="Failed to encode frame as PNG")
+            
+            image_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
+            print(f"✅ High-quality snapshot: {frame.shape[1]}x{frame.shape[0]} (PNG, original size)")
+            
+            return {
+                "success": True,
+                "imageData": f"data:image/png;base64,{image_b64}",
+                "width": int(frame.shape[1]),
+                "height": int(frame.shape[0])
+            }
+        else:
+            # Low quality: Resize và JPEG (cho backward compatibility)
+            frame = cv2.resize(frame, (640, 480))
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ret:
+                raise HTTPException(status_code=500, detail="Failed to encode frame")
+            
+            image_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
+            print(f"⚠️ Low-quality snapshot: 640x480 (JPEG quality 85)")
+            
+            return {
+                "success": True,
+                "imageData": f"data:image/jpeg;base64,{image_b64}"
+            }
         
     except HTTPException:
         raise

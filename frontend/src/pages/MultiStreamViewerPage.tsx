@@ -9,13 +9,6 @@ import type { ParkingLot } from '../types/parkingLot.types';
 // STREAM SOURCE CONFIGURATION
 // ============================================
 
-// ESP32-CAM IP Addresses (Cấu hình 3 ESP32)
-const ESP32_CAMERAS = [
-  { id: 'esp32_1', name: 'ESP32-CAM 1', ip: 'http://192.168.1.100:81/stream' },
-  { id: 'esp32_2', name: 'ESP32-CAM 2', ip: 'http://192.168.1.101:81/stream' },
-  { id: 'esp32_3', name: 'ESP32-CAM 3', ip: 'http://192.168.1.102:81/stream' },
-];
-
 // Video Files (Cấu hình 3 video files)
 const VIDEO_FILES = [
   { id: 'video_1', name: 'Video 1 - Parking A', filename: 'parking_a.mp4' },
@@ -28,6 +21,21 @@ const FASTAPI_BASE = API_CONFIG.baseURL;
 
 type SourceType = 'esp32' | 'video' | 'mock';
 type TileStatus = 'idle' | 'connected' | 'error';
+
+interface ESP32Camera {
+  id: string;
+  name: string;
+  ip: string;
+}
+
+// Default ESP32 cameras (sẽ được load từ localStorage hoặc dùng default)
+const DEFAULT_ESP32_CAMERAS: ESP32Camera[] = [
+  { id: 'esp32_1', name: 'ESP32-CAM 1', ip: 'http://192.168.1.100:81/stream' },
+  { id: 'esp32_2', name: 'ESP32-CAM 2', ip: 'http://192.168.1.101:81/stream' },
+  { id: 'esp32_3', name: 'ESP32-CAM 3', ip: 'http://192.168.1.102:81/stream' },
+];
+
+const ESP32_STORAGE_KEY = 'smartparking_esp32_cameras';
 
 interface StreamTileConfig {
   id: string;
@@ -93,8 +101,9 @@ function StreamViewerTile({
           
           if (ctx) {
             ctx.drawImage(imgRef.current, 0, 0);
-            const imageData = canvas.toDataURL('image/jpeg', 0.85);
-            console.log('✅ Captured frame from <img> element (current frame)');
+            // Use PNG for OCR to preserve quality (no compression loss)
+            const imageData = canvas.toDataURL('image/png');
+            console.log('✅ Captured frame from <img> element (current frame) - PNG format for OCR');
             return imageData;
           }
         } catch (canvasError) {
@@ -102,21 +111,23 @@ function StreamViewerTile({
         }
       }
       
-      // Option 2: Video file - dùng snapshot endpoint (fallback nếu canvas không được)
+      // Option 2: Video file - dùng snapshot endpoint với chất lượng cao (KHÔNG resize, PNG)
+      // Ưu tiên dùng endpoint này vì lấy frame gốc từ video, chất lượng tốt hơn capture từ stream
       if (sourceType === 'video') {
         const urlParams = new URLSearchParams(streamUrl.split('?')[1] || '');
         const file = urlParams.get('file');
         
         if (file) {
-          console.log('📸 Getting snapshot from video file via backend (fallback)...');
+          console.log('📸 Getting high-quality snapshot from video file (original frame, PNG)...');
           
           // Fetch với timeout
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
           
           try {
+            // Dùng quality=high để lấy frame gốc (không resize, PNG format)
             const response = await fetch(
-              `${FASTAPI_BASE}/api/stream/snapshot?mode=video_file&file=${encodeURIComponent(file)}`,
+              `${FASTAPI_BASE}/api/stream/snapshot?mode=video_file&file=${encodeURIComponent(file)}&quality=high`,
               { signal: controller.signal }
             );
             clearTimeout(timeoutId);
@@ -127,7 +138,7 @@ function StreamViewerTile({
             
             const data = await response.json();
             if (data.success && data.imageData) {
-              console.log('✅ Got snapshot from backend (may not be current frame)');
+              console.log(`✅ Got high-quality snapshot from backend: ${data.width}x${data.height} (PNG, original frame)`);
               return data.imageData;
             }
           } catch (fetchError) {
@@ -538,6 +549,33 @@ export function MultiStreamViewerPage() {
   // NEW: Streaming control state
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   
+  // ESP32 Cameras state (load from localStorage)
+  const [esp32Cameras, setEsp32Cameras] = useState<ESP32Camera[]>(() => {
+    try {
+      const stored = localStorage.getItem(ESP32_STORAGE_KEY);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (error) {
+      console.error('Error loading ESP32 cameras from localStorage:', error);
+    }
+    return DEFAULT_ESP32_CAMERAS;
+  });
+
+  // ESP32 Camera management state
+  const [editingCamera, setEditingCamera] = useState<ESP32Camera | null>(null);
+  const [newCameraName, setNewCameraName] = useState<string>('');
+  const [newCameraIp, setNewCameraIp] = useState<string>('');
+
+  // Save ESP32 cameras to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(ESP32_STORAGE_KEY, JSON.stringify(esp32Cameras));
+    } catch (error) {
+      console.error('Error saving ESP32 cameras to localStorage:', error);
+    }
+  }, [esp32Cameras]);
+  
   // Load parking lots
   useEffect(() => {
     if (!ownerId) return;
@@ -552,11 +590,93 @@ export function MultiStreamViewerPage() {
     loadParkingLots();
   }, [ownerId]);
 
+  // ESP32 Camera management functions
+  const handleAddESP32Camera = () => {
+    if (!newCameraName.trim() || !newCameraIp.trim()) {
+      alert('Vui lòng nhập đầy đủ tên và IP address');
+      return;
+    }
+
+    // Validate IP format (basic validation)
+    try {
+      const url = new URL(newCameraIp);
+      if (!url.protocol.startsWith('http')) {
+        alert('IP address phải bắt đầu bằng http:// hoặc https://');
+        return;
+      }
+    } catch (error) {
+      alert('IP address không hợp lệ. Ví dụ: http://192.168.1.100:81/stream');
+      return;
+    }
+
+    const newCamera: ESP32Camera = {
+      id: `esp32_${Date.now()}`,
+      name: newCameraName.trim(),
+      ip: newCameraIp.trim(),
+    };
+
+    setEsp32Cameras((prev) => [...prev, newCamera]);
+    setNewCameraName('');
+    setNewCameraIp('');
+  };
+
+  const handleEditESP32Camera = (camera: ESP32Camera) => {
+    setEditingCamera(camera);
+    setNewCameraName(camera.name);
+    setNewCameraIp(camera.ip);
+  };
+
+  const handleUpdateESP32Camera = () => {
+    if (!editingCamera || !newCameraName.trim() || !newCameraIp.trim()) {
+      alert('Vui lòng nhập đầy đủ tên và IP address');
+      return;
+    }
+
+    // Validate IP format
+    try {
+      const url = new URL(newCameraIp);
+      if (!url.protocol.startsWith('http')) {
+        alert('IP address phải bắt đầu bằng http:// hoặc https://');
+        return;
+      }
+    } catch (error) {
+      alert('IP address không hợp lệ. Ví dụ: http://192.168.1.100:81/stream');
+      return;
+    }
+
+    setEsp32Cameras((prev) =>
+      prev.map((cam) =>
+        cam.id === editingCamera.id
+          ? { ...cam, name: newCameraName.trim(), ip: newCameraIp.trim() }
+          : cam
+      )
+    );
+    setEditingCamera(null);
+    setNewCameraName('');
+    setNewCameraIp('');
+  };
+
+  const handleDeleteESP32Camera = (id: string) => {
+    if (confirm('Bạn có chắc muốn xóa camera này?')) {
+      setEsp32Cameras((prev) => prev.filter((cam) => cam.id !== id));
+      // Clear selection if deleted camera was selected
+      if (selectedSourceId === id) {
+        setSelectedSourceId('');
+      }
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingCamera(null);
+    setNewCameraName('');
+    setNewCameraIp('');
+  };
+
   // Get stream URL based on source type and ID
   const getStreamUrl = (type: SourceType, sourceId: string): string => {
     switch (type) {
       case 'esp32': {
-        const esp32 = ESP32_CAMERAS.find((cam) => cam.id === sourceId);
+        const esp32 = esp32Cameras.find((cam) => cam.id === sourceId);
         return esp32 ? esp32.ip : '';
       }
       case 'video': {
@@ -574,7 +694,7 @@ export function MultiStreamViewerPage() {
   const getDefaultLabel = (type: SourceType, sourceId: string): string => {
     switch (type) {
       case 'esp32': {
-        const esp32 = ESP32_CAMERAS.find((cam) => cam.id === sourceId);
+        const esp32 = esp32Cameras.find((cam) => cam.id === sourceId);
         return esp32 ? esp32.name : 'ESP32 Camera';
       }
       case 'video': {
@@ -644,6 +764,122 @@ export function MultiStreamViewerPage() {
             Xem nhiều camera ESP32 hoặc video file đồng thời trên một màn hình
           </p>
         </div>
+
+        {/* ESP32 Camera Management Panel */}
+        <details className="bg-white rounded-xl shadow-lg p-6 mb-6 border border-gray-200">
+          <summary className="cursor-pointer font-semibold text-strawberry-800 hover:text-strawberry-600 flex items-center gap-2 text-xl mb-4">
+            <span>⚙️</span>
+            <span>Quản lý ESP32 Cameras</span>
+            <span className="text-sm font-normal text-gray-500 ml-auto">
+              ({esp32Cameras.length} camera{esp32Cameras.length !== 1 ? 's' : ''})
+            </span>
+          </summary>
+          
+          <div className="mt-4 space-y-4">
+            {/* Add/Edit Form */}
+            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+              <h3 className="font-semibold text-gray-700 mb-3">
+                {editingCamera ? '✏️ Sửa Camera' : '➕ Thêm Camera Mới'}
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Tên Camera
+                  </label>
+                  <input
+                    type="text"
+                    value={newCameraName}
+                    onChange={(e) => setNewCameraName(e.target.value)}
+                    placeholder="VD: ESP32-CAM 1, Entrance Gate"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-strawberry-500 focus:border-strawberry-500 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    IP Address (Stream URL)
+                  </label>
+                  <input
+                    type="text"
+                    value={newCameraIp}
+                    onChange={(e) => setNewCameraIp(e.target.value)}
+                    placeholder="http://192.168.1.100:81/stream"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-strawberry-500 focus:border-strawberry-500 text-sm font-mono"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {editingCamera ? (
+                  <>
+                    <button
+                      onClick={handleUpdateESP32Camera}
+                      className="px-4 py-2 bg-strawberry-500 text-white rounded-lg hover:bg-strawberry-600 transition font-medium text-sm"
+                    >
+                      💾 Lưu thay đổi
+                    </button>
+                    <button
+                      onClick={handleCancelEdit}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium text-sm"
+                    >
+                      ❌ Hủy
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleAddESP32Camera}
+                    className="px-4 py-2 bg-strawberry-500 text-white rounded-lg hover:bg-strawberry-600 transition font-medium text-sm"
+                  >
+                    ➕ Thêm Camera
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                💡 Ví dụ IP: <code className="bg-white px-1 rounded">http://192.168.1.100:81/stream</code>
+              </p>
+            </div>
+
+            {/* Camera List */}
+            <div className="space-y-2">
+              <h3 className="font-semibold text-gray-700">📹 Danh sách Cameras:</h3>
+              {esp32Cameras.length === 0 ? (
+                <div className="text-center py-4 text-gray-500 text-sm">
+                  Chưa có camera nào. Hãy thêm camera mới.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {esp32Cameras.map((camera) => (
+                    <div
+                      key={camera.id}
+                      className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between hover:shadow-md transition"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-gray-800 truncate">{camera.name}</div>
+                        <div className="text-xs text-gray-500 font-mono truncate" title={camera.ip}>
+                          {camera.ip}
+                        </div>
+                      </div>
+                      <div className="flex gap-1 ml-2">
+                        <button
+                          onClick={() => handleEditESP32Camera(camera)}
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
+                          title="Sửa"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => handleDeleteESP32Camera(camera.id)}
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded transition"
+                          title="Xóa"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </details>
 
         {/* Add Stream Panel */}
         <div className="bg-white rounded-xl shadow-lg p-6 mb-6 border border-gray-200">
@@ -720,31 +956,44 @@ export function MultiStreamViewerPage() {
 
               {/* ESP32 Selection */}
               {sourceType === 'esp32' && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {ESP32_CAMERAS.map((cam) => (
-                    <button
-                      key={cam.id}
-                      onClick={() => setSelectedSourceId(cam.id)}
-                      className={`px-4 py-3 rounded-lg border-2 transition-all text-left ${
-                        selectedSourceId === cam.id
-                          ? 'border-strawberry-500 bg-strawberry-50 shadow-md'
-                          : 'border-gray-200 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-2xl">📹</span>
-                        <div>
-                          <div className="font-semibold text-gray-800">{cam.name}</div>
-                          <div className="text-xs text-gray-500 font-mono truncate">
-                            {cam.ip}
+                <div>
+                  {esp32Cameras.length === 0 ? (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
+                      <p className="text-sm text-yellow-800 mb-2">
+                        ⚠️ Chưa có ESP32 camera nào được cấu hình.
+                      </p>
+                      <p className="text-xs text-yellow-700">
+                        Vui lòng thêm camera trong phần <strong>"Quản lý ESP32 Cameras"</strong> phía trên.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {esp32Cameras.map((cam) => (
+                        <button
+                          key={cam.id}
+                          onClick={() => setSelectedSourceId(cam.id)}
+                          className={`px-4 py-3 rounded-lg border-2 transition-all text-left ${
+                            selectedSourceId === cam.id
+                              ? 'border-strawberry-500 bg-strawberry-50 shadow-md'
+                              : 'border-gray-200 bg-white hover:border-gray-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">📹</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-gray-800 truncate">{cam.name}</div>
+                              <div className="text-xs text-gray-500 font-mono truncate" title={cam.ip}>
+                                {cam.ip}
+                              </div>
+                            </div>
+                            {selectedSourceId === cam.id && (
+                              <span className="ml-auto text-strawberry-500 flex-shrink-0">✓</span>
+                            )}
                           </div>
-                        </div>
-                        {selectedSourceId === cam.id && (
-                          <span className="ml-auto text-strawberry-500">✓</span>
-                        )}
-                      </div>
-                    </button>
-                  ))}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -991,14 +1240,16 @@ export function MultiStreamViewerPage() {
             {/* ESP32 Configuration */}
             <div className="bg-strawberry-50 rounded-lg p-4">
               <h4 className="font-semibold text-strawberry-800 mb-2">📹 Cấu hình ESP32-CAM</h4>
-              <p className="mb-2">Sửa IP addresses trong file <code className="bg-white px-2 py-0.5 rounded">MultiStreamViewerPage.tsx</code>:</p>
-              <pre className="bg-white p-3 rounded border border-strawberry-200 text-xs overflow-x-auto">
-{`const ESP32_CAMERAS = [
-  { id: 'esp32_1', name: 'ESP32-CAM 1', ip: 'http://192.168.1.100:81/stream' },
-  { id: 'esp32_2', name: 'ESP32-CAM 2', ip: 'http://192.168.1.101:81/stream' },
-  { id: 'esp32_3', name: 'ESP32-CAM 3', ip: 'http://192.168.1.102:81/stream' },
-];`}
-              </pre>
+              <p className="mb-2">
+                ✅ Bây giờ bạn có thể quản lý ESP32 cameras trực tiếp trên web!
+              </p>
+              <p className="mb-2 text-sm text-strawberry-700">
+                Sử dụng phần <strong>"Quản lý ESP32 Cameras"</strong> ở trên để thêm, sửa, xóa cameras.
+                Cấu hình sẽ được lưu tự động vào localStorage.
+              </p>
+              <p className="text-xs text-strawberry-600 mt-2">
+                💡 Format IP: <code className="bg-white px-1 rounded">http://192.168.1.100:81/stream</code>
+              </p>
             </div>
 
             {/* Video Files Configuration */}

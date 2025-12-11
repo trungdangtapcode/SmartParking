@@ -102,8 +102,37 @@ class AIService:
         if frame is None:
             raise ValueError("Unable to decode image")
         
-        # Run ALPR prediction
+        # Analyze image quality for debugging
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        brightness = np.mean(gray)
+        contrast = np.std(gray)
+        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+        
         print(f"🔍 Running ALPR prediction on image shape: {frame.shape}")
+        print(f"   Image quality - Brightness: {brightness:.1f}, Contrast: {contrast:.1f}, Sharpness: {sharpness:.2f}")
+        
+        # Preprocessing: Denoise và Upscale (dựa trên phân tích chất lượng ảnh)
+        original_shape = frame.shape[:2]  # (height, width)
+        original_h, original_w = original_shape
+        scale_factor = 1.0  # Track scale factor for bbox adjustment
+        
+        # 1. Denoise preprocessing (nếu cần)
+        # Noise level cao → cần denoise
+        noise_level = cv2.Laplacian(gray, cv2.CV_64F).var()
+        if noise_level > 50:  # Threshold từ phân tích
+            print(f"   🔧 Applying denoise preprocessing (noise level: {noise_level:.2f})")
+            frame = cv2.fastNlMeansDenoisingColored(frame, None, 10, 10, 7, 21)
+        
+        # 2. Upscale preprocessing (nếu ảnh quá nhỏ)
+        # Nếu ảnh nhỏ hơn 1280x720 → upscale 2x
+        h, w = frame.shape[:2]
+        if w < 1280 or h < 720:
+            scale_factor = max(1280 / w, 720 / h, 2.0)  # Tối thiểu 2x
+            new_w = int(w * scale_factor)
+            new_h = int(h * scale_factor)
+            print(f"   🔧 Upscaling image: {w}x{h} → {new_w}x{new_h} (scale: {scale_factor:.2f}x)")
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+        
         results = self.alpr_model.predict(frame)
         print(f"📊 ALPR returned {len(results)} results")
         
@@ -117,7 +146,21 @@ class AIService:
             confidence = getattr(result, "confidence", 0.0)
             detection = getattr(result, "detection", None)
             
+            # Try nested OCR object if plate_text is empty
+            if not plate_text and hasattr(result, "ocr"):
+                ocr_obj = getattr(result, "ocr", None)
+                if ocr_obj:
+                    plate_text = getattr(ocr_obj, "text", "") or ""
+                    confidence = getattr(ocr_obj, "confidence", 0.0)
+                    print(f"  Result {idx}: Found in OCR object - plate='{plate_text}', confidence={confidence}")
+            
             print(f"  Result {idx}: plate='{plate_text}', confidence={confidence}")
+            
+            # Debug: Print all attributes
+            if not plate_text:
+                print(f"    Debug - result attributes: {dir(result)}")
+                if detection:
+                    print(f"    Debug - detection attributes: {dir(detection)}")
             
             plate_text = plate_text.upper().strip()
             
@@ -131,26 +174,43 @@ class AIService:
             if detection and hasattr(detection, "box"):
                 box = detection.box
                 if len(box) == 4:
-                    x1, y1, x2, y2 = map(int, box)
-                    bbox = [x1, y1, x2 - x1, y2 - y1]  # [x, y, w, h]
+                    # Tọa độ từ model (trên ảnh đã preprocess/upscale)
+                    x1_model, y1_model, x2_model, y2_model = map(int, box)
                     
-                    # Draw green box
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (64, 255, 120), 3)
+                    # Vẽ bbox trực tiếp trên ảnh annotated (dùng tọa độ từ model)
+                    # Box màu xanh lá, độ dày 3px
+                    cv2.rectangle(annotated, (x1_model, y1_model), (x2_model, y2_model), (64, 255, 120), 3)
                     
-                    # Draw label
+                    # Vẽ label với background
                     label = f"{plate_text} ({confidence * 100:.1f}%)"
-                    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
-                    text_y = max(y2 - 8, y1 + h + 8)
-                    cv2.rectangle(annotated, (x1, text_y - h - 8), (x1 + w + 12, text_y + 6), (64, 255, 120), -1)
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
+                    text_y = max(y2_model - 8, y1_model + th + 8)
+                    # Background màu xanh lá cho label
+                    cv2.rectangle(annotated, (x1_model, text_y - th - 8), (x1_model + tw + 12, text_y + 6), (64, 255, 120), -1)
+                    # Text màu đen
                     cv2.putText(
                         annotated,
                         label,
-                        (x1 + 6, text_y),
+                        (x1_model + 6, text_y),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.75,
                         (0, 40, 20),
                         2,
                     )
+                    
+                    # Scale bbox về kích thước gốc để trả về cho frontend
+                    if scale_factor > 1.0:
+                        x1_original = int(x1_model / scale_factor)
+                        y1_original = int(y1_model / scale_factor)
+                        x2_original = int(x2_model / scale_factor)
+                        y2_original = int(y2_model / scale_factor)
+                    else:
+                        x1_original, y1_original, x2_original, y2_original = x1_model, y1_model, x2_model, y2_model
+                    
+                    bbox = [x1_original, y1_original, x2_original - x1_original, y2_original - y1_original]  # [x, y, w, h]
+                    print(f"  📦 BBox on processed image: ({x1_model}, {y1_model}) → ({x2_model}, {y2_model})")
+                    if scale_factor > 1.0:
+                        print(f"  📦 BBox scaled to original: ({x1_original}, {y1_original}) → ({x2_original}, {y2_original}) size: {x2_original-x1_original}x{y2_original-y1_original}")
             
             plates.append({
                 "text": plate_text,
@@ -176,6 +236,11 @@ class AIService:
                 (0, 0, 0),
                 3,
             )
+        
+        # Resize annotated image về kích thước gốc nếu đã upscale (để tiết kiệm bandwidth)
+        if scale_factor > 1.0:
+            annotated = cv2.resize(annotated, (original_w, original_h), interpolation=cv2.INTER_AREA)
+            print(f"   🔧 Resized annotated image back to original size: {original_w}x{original_h}")
         
         # Encode annotated image
         ok, buffer = cv2.imencode(".png", annotated)
