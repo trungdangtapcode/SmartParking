@@ -10,6 +10,7 @@ export const API_CONFIG = {
     endpoints: {
       health: '/health',
       plateDetect: '/api/plate-detect',
+      plateDetectVideoFile: '/api/plate-detect/video-file',
       objectTracking: '/api/object-tracking',
       esp32Snapshot: '/api/esp32/snapshot',
       testESP32: '/test/esp32',

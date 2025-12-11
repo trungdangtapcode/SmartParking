@@ -15,9 +15,12 @@ cd frontend
 npm install
 npm run dev
 
-### Server
+### Server (FastAPI)
 cd server
-npm start
+pip install -r requirements_fastapi.txt
+uvicorn main_fastapi:app --host 0.0.0.0 --port 8000 --reload
+
+> Lưu ý: Signaling server bằng Node.js đã gỡ bỏ. Muốn dùng WebRTC Host/Viewer cần triển khai signaling mới (có thể tích hợp vào FastAPI). Hiện tại chỉ còn các API AI/streaming của FastAPI trên port 8000.
 
 
 ## 🎯 Object Tracking

@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '../config/api';
-import { performVehicleCheckIn } from '../services/checkInService';
+import { performVehicleCheckIn, performVehicleCheckInFromVideoFile } from '../services/checkInService';
 
 const API_BASE = API_CONFIG.baseURL;
 
@@ -80,6 +80,16 @@ export function StreamTileWithCheckIn({
     licensePlate?: string;
     error?: string;
   } | null>(null);
+  const streamStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isStreaming && streamStartRef.current === null) {
+      streamStartRef.current = Date.now();
+    }
+    if (!isStreaming) {
+      streamStartRef.current = null;
+    }
+  }, [isStreaming]);
 
   const handleCheckIn = async () => {
     if (!parkingId || !cameraId || !ownerId) {
@@ -96,7 +106,43 @@ export function StreamTileWithCheckIn({
     setCheckInResult(null);
 
     try {
-      // Get snapshot from stream
+      // Nếu là video file: dùng backend lấy frame theo timestamp (tạm thời không gửi timeMs)
+      if (sourceType === 'video') {
+        console.log('🎞️ Video mode: calling backend plate-detect from video file...');
+        // Extract filename
+        const urlParams = new URLSearchParams(streamUrl.split('?')[1] || '');
+        const file = urlParams.get('file');
+        if (!file) {
+          throw new Error('Không tìm thấy file trong stream URL');
+        }
+        // Ước lượng thời gian phát dựa trên thời điểm start stream (đơn giản)
+        const timeMs = streamStartRef.current ? Date.now() - streamStartRef.current : undefined;
+        const result = await performVehicleCheckInFromVideoFile(
+          file,
+          parkingId,
+          cameraId,
+          ownerId,
+          timeMs
+        );
+        if (result.success && result.vehicleId && result.licensePlate) {
+          setCheckInResult({
+            vehicleId: result.vehicleId,
+            licensePlate: result.licensePlate,
+          });
+          
+          if (onCheckInSuccess) {
+            onCheckInSuccess(result.vehicleId, result.licensePlate);
+          }
+          
+          alert(`✅ Check-in thành công!\nBiển số: ${result.licensePlate}\nVehicle ID: ${result.vehicleId}`);
+        } else {
+          setCheckInResult({ error: result.error || 'Check-in failed' });
+          alert(`❌ Check-in thất bại: ${result.error || 'Unknown error'}`);
+        }
+        return;
+      }
+
+      // Mặc định: ESP32/mock → lấy snapshot rồi gửi ảnh
       console.log('📸 Getting snapshot from stream...');
       const imageData = await getSnapshotFromStream(streamUrl, sourceType);
 
@@ -106,7 +152,6 @@ export function StreamTileWithCheckIn({
 
       console.log('🔍 Starting check-in with OCR...');
       
-      // Perform check-in
       const result = await performVehicleCheckIn(
         imageData,
         parkingId,

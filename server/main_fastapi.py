@@ -306,6 +306,50 @@ async def detect_license_plate(request: dict):
         print(f"❌ Plate detection error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ========== AI DETECTION FROM VIDEO FILE ==========
+@app.post("/api/plate-detect/video-file")
+async def detect_license_plate_from_video(request: dict):
+    """
+    Detect license plate từ video file (lấy 1 frame tại time_ms hoặc frame_index)
+    Input: { "file": "parking_a.mp4", "timeMs": 63000, "frameIndex": 1234 (optional) }
+    """
+    try:
+        file = request.get("file")
+        time_ms = request.get("timeMs")
+        frame_index = request.get("frameIndex")
+
+        if not file:
+            raise HTTPException(status_code=400, detail="file is required")
+
+        # Find video file
+        stream_folder = Path(__file__).parent / "stream"
+        video_path = stream_folder / file
+        if not video_path.exists():
+            video_path = Path(__file__).parent / file
+        if not video_path.exists():
+            raise HTTPException(status_code=404, detail=f"Video file not found: {file}")
+
+        print(f"📥 Detecting plate from video file: {video_path.name} (time_ms={time_ms}, frame_index={frame_index})")
+
+        result = await ai_service.detect_plate_from_video_file(
+            video_path=video_path,
+            time_ms=time_ms,
+            frame_index=frame_index,
+        )
+
+        # Lưu vào Firebase
+        if result.get("plates"):
+            await firebase_service.save_plate_detection(result)
+
+        print(f"✅ Detected {len(result.get('plates', []))} plates from video file")
+        return {"success": True, **result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Plate detection from video error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/object-tracking")
 async def track_objects(request: dict):
     """

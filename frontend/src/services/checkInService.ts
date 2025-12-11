@@ -13,6 +13,105 @@ export interface CheckInResult {
   error?: string;
 }
 
+// New: detect directly from video file via backend snapshot
+export async function performVehicleCheckInFromVideoFile(
+  file: string,
+  parkingId: string,
+  cameraId: string,
+  ownerId: string,
+  timeMs?: number,
+  onProgress?: (stage: string, percentage: number) => void
+): Promise<CheckInResult> {
+  try {
+    onProgress?.('Đang lấy frame từ video...', 40);
+    const resp = await fetch(`${API_BASE}${API_CONFIG.endpoints.plateDetectVideoFile}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file,
+        timeMs,
+      }),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Plate detect from video failed: ${text}`);
+    }
+
+    const ocrData = await resp.json();
+
+    if (!ocrData.success || !ocrData.plates || ocrData.plates.length === 0) {
+      return {
+        success: false,
+        error: 'Không tìm thấy biển số trong frame video.',
+      };
+    }
+
+    const validPlates = ocrData.plates.filter(
+      (plate: { text: string; confidence: number }) =>
+        plate.text && plate.text.trim().length > 0 && (plate.confidence || 0) >= 0.1
+    );
+
+    if (validPlates.length === 0) {
+      return {
+        success: false,
+        error: 'Biển số không đủ tin cậy. Hãy thử lại.',
+      };
+    }
+
+    const bestPlate = validPlates[0];
+    const licensePlate = bestPlate.text.trim().toUpperCase();
+
+    onProgress?.('Đang lưu kết quả OCR...', 85);
+
+    const plateDetectionPayload: SavePlateDetectionPayload = {
+      ownerId,
+      parkingId,
+      cameraId,
+      plateText: licensePlate,
+      confidence: bestPlate.confidence,
+      // Không có ảnh gốc từ frontend; dùng annotatedImage (PNG) làm input lưu trữ tạm
+      inputImageUrl: ocrData.annotatedImage,
+      annotatedImageUrl: ocrData.annotatedImage,
+    };
+
+    const savePlateResult = await savePlateDetection(plateDetectionPayload);
+    if (!savePlateResult.success) {
+      console.warn('⚠️ Failed to save plate detection:', savePlateResult.error);
+    }
+
+    onProgress?.('Đang tạo Vehicle ID...', 90);
+
+    const checkInResult = await createVehicleCheckIn({
+      licensePlate,
+      parkingId,
+      cameraId,
+      ownerId,
+      entryImage: ocrData.annotatedImage,
+    });
+
+    if (!checkInResult.success) {
+      return {
+        success: false,
+        error: checkInResult.error || 'Failed to create vehicle check-in',
+      };
+    }
+
+    return {
+      success: true,
+      vehicleId: checkInResult.vehicleId,
+      licensePlate,
+      confidence: bestPlate.confidence,
+    };
+  } catch (error) {
+    console.error('❌ Check-in video error:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
 /**
  * Check-in vehicle: OCR plate + Create Vehicle ID
  */

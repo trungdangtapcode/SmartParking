@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { API_CONFIG } from '../config/api';
-import { performVehicleCheckIn } from '../services/checkInService';
+import { performVehicleCheckIn, performVehicleCheckInFromVideoFile } from '../services/checkInService';
 import { getParkingLotsByOwner } from '../services/parkingLotService';
 import type { ParkingLot } from '../types/parkingLot.types';
 
@@ -77,6 +77,16 @@ function StreamViewerTile({
   const [testCaptureImage, setTestCaptureImage] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ stage: string; percentage: number } | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const streamStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isStreaming && streamStartRef.current === null) {
+      streamStartRef.current = Date.now();
+    }
+    if (!isStreaming) {
+      streamStartRef.current = null;
+    }
+  }, [isStreaming]);
 
   const handleImageError = () => {
     setStatus('error');
@@ -212,7 +222,49 @@ function StreamViewerTile({
     setProgress({ stage: 'Đang capture frame...', percentage: 10 });
 
     try {
-      // Get snapshot from stream
+      // Nếu là video file: gọi backend lấy frame theo timestamp (không cần capture canvas)
+      if (sourceType === 'video') {
+        setProgress({ stage: 'Đang lấy frame từ video...', percentage: 30 });
+        const urlParams = new URLSearchParams(streamUrl.split('?')[1] || '');
+        const file = urlParams.get('file');
+        if (!file) {
+          throw new Error('Không tìm thấy file trong stream URL');
+        }
+
+        const timeMs = streamStartRef.current ? Date.now() - streamStartRef.current : undefined;
+        const result = await performVehicleCheckInFromVideoFile(
+          file,
+          parkingId,
+          cameraId,
+          ownerId,
+          timeMs, // ước lượng theo thời điểm start stream
+          (stage: string, percentage: number) => {
+            setProgress({ stage, percentage });
+          }
+        );
+
+        setProgress({ stage: 'Hoàn tất!', percentage: 100 });
+        console.log('📋 Check-in result:', result);
+
+        if (result.success && result.vehicleId && result.licensePlate) {
+          setCheckInResult({
+            vehicleId: result.vehicleId,
+            licensePlate: result.licensePlate,
+          });
+          
+          alert(`✅ Check-in thành công!\nBiển số: ${result.licensePlate}\nVehicle ID: ${result.vehicleId}`);
+        } else {
+          setCheckInResult({ error: result.error || 'Check-in failed' });
+          alert(`❌ Check-in thất bại: ${result.error || 'Unknown error'}`);
+        }
+
+        setTimeout(() => {
+          setProgress(null);
+        }, 2000);
+        return;
+      }
+
+      // ESP32/mock: vẫn capture snapshot rồi gửi ảnh
       console.log('📸 Getting snapshot from stream...');
       const imageData = await getSnapshotFromStream();
       setProgress({ stage: 'Đang gửi frame cho OCR...', percentage: 30 });
