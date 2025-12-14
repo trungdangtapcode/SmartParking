@@ -16,3 +16,8 @@ lap>=0.4.0  # Linear Assignment Problem solver - required for tracking
 # License Plate Recognition (already installed)
 fast-alpr[onnx]>=0.3.0
 
+# Web Framework
+flask>=2.3.0
+
+# Utilities
+pyyaml>=6.0  # For reading OpenVINO model metadata

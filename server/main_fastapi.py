@@ -16,10 +16,16 @@ from contextlib import asynccontextmanager
 # Import services
 from services.ai_service import AIService
 from services.firebase_service import FirebaseService
+from services.video_buffer import VideoBufferManager
+from services.tracking_manager import TrackingManager
+from services.plate_track_assigner import PlateTrackAssigner
 
 # Global instances
 ai_service = None
 firebase_service = None
+video_buffer_manager = VideoBufferManager()
+tracking_manager = None  # Will be initialized after YOLO model loads
+plate_assigner = None  # Plate-to-track assignment service
 
 # ========== CONFIGURATION ==========
 ESP32_STREAM_URL = "http://192.168.33.122:81/stream"  # ESP32-CAM IP
@@ -32,7 +38,7 @@ STREAM_MODE = os.getenv("STREAM_MODE", "esp32")  # Default: ESP32
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager - load models khi start server"""
-    global ai_service, firebase_service
+    global ai_service, firebase_service, tracking_manager, plate_assigner
     
     print("🚀 Starting FastAPI SmartParking Server...")
     
@@ -47,10 +53,27 @@ async def lifespan(app: FastAPI):
     firebase_service = FirebaseService()
     print("✅ Firebase initialized")
     
+    # Initialize Plate Assignment Service
+    print("🏷️  Initializing Plate Track Assigner...")
+    plate_assigner = PlateTrackAssigner()
+    print("✅ Plate Track Assigner initialized")
+    
+    # Initialize Tracking Manager với YOLO model và PlateAssigner
+    print("🎯 Initializing Tracking Manager...")
+    tracking_manager = TrackingManager(
+        yolo_model=ai_service.yolo_model,
+        plate_assigner=plate_assigner
+    )
+    print("✅ Tracking Manager initialized")
+    
     yield  # Server chạy ở đây
     
     # Cleanup khi shutdown
     print("🛑 Shutting down server...")
+    if tracking_manager:
+        tracking_manager.cleanup()
+    if plate_assigner:
+        plate_assigner.clear_all()
     if ai_service:
         ai_service.cleanup()
 
@@ -88,7 +111,10 @@ async def health_check():
 @app.get("/stream")
 async def stream_video(
     mode: str = Query(default=None, description="Stream mode: esp32, video_file, mock"),
-    file: str = Query(default=None, description="Video filename (for mode=video_file)")
+    file: str = Query(default=None, description="Video filename (for mode=video_file)"),
+    tracking: bool = Query(default=False, description="Enable real-time tracking (only for video_file mode)"),
+    camera_id: str = Query(default=None, description="Camera ID for tracking"),
+    owner_id: str = Query(default=None, description="Owner ID for loading barrier zones")
 ):
     """
     Stream video từ nhiều nguồn:
@@ -96,15 +122,23 @@ async def stream_video(
     - Video file (for testing) - supports multiple files from stream/ folder
     - Mock FFmpeg stream (for testing)
     
+    NEW: Real-time tracking support for video files
+    
     Usage:
     - <img src="http://localhost:8000/stream" />  (ESP32)
     - <img src="http://localhost:8000/stream?mode=video_file&file=parking_a.mp4" />  (Video file)
+    - <img src="http://localhost:8000/stream?mode=video_file&file=parking_a.mp4&tracking=true&camera_id=cam1" />  (With tracking)
     - <img src="http://localhost:8000/stream?mode=mock" />  (FFmpeg mock)
     """
     # Determine stream mode
     stream_mode = mode or STREAM_MODE
     
-    if stream_mode == "video_file":
+    # NEW: Check if tracking is enabled (only for video_file mode)
+    if stream_mode == "video_file" and tracking:
+        if not camera_id:
+            raise HTTPException(status_code=400, detail="camera_id is required when tracking=true")
+        return await stream_with_tracking(video_filename=file, camera_id=camera_id, owner_id=owner_id)
+    elif stream_mode == "video_file":
         return await stream_from_video_file(video_filename=file)
     elif stream_mode == "mock":
         return await stream_from_mock()
@@ -204,8 +238,31 @@ async def stream_from_video_file(video_filename: str = None):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
                 
+                # Cập nhật buffer với frame gốc (trước resize)
+                try:
+                    video_buffer_manager.update_frame(video_path.name, frame)
+                except Exception as buffer_err:
+                    print(f"⚠️ Buffer update error: {buffer_err}")
+                
                 # Resize để giống ESP32-CAM (640x480)
                 frame = cv2.resize(frame, (640, 480))
+
+                # Overlay timestamp
+                try:
+                    from datetime import datetime
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cv2.putText(
+                        frame,
+                        ts,
+                        (10, frame.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 0),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                except Exception as overlay_err:
+                    print(f"⚠️ Timestamp overlay error: {overlay_err}")
                 
                 # Encode frame as JPEG
                 ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -278,6 +335,113 @@ async def stream_from_mock():
         }
     )
 
+async def stream_with_tracking(video_filename: str = None, camera_id: str = None, owner_id: str = None):
+    """
+    Stream MJPEG with real-time tracking annotations (YOLO + ByteTrack).
+    Uses TrackingManager with multi-threaded tracking processor.
+    
+    Args:
+        video_filename: Video filename in stream/ folder
+        camera_id: Unique camera identifier
+        owner_id: Owner ID to load barrier zones from Firestore (optional)
+    """
+    global tracking_manager
+    
+    if not video_filename:
+        raise HTTPException(status_code=400, detail="video_filename is required for tracking mode")
+    
+    if not camera_id:
+        raise HTTPException(status_code=400, detail="camera_id is required for tracking mode")
+    
+    # Determine video path
+    stream_folder = Path(__file__).parent / "stream"
+    video_path = stream_folder / video_filename
+    
+    if not video_path.exists():
+        video_path = Path(__file__).parent / video_filename
+    
+    if not video_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Video file not found: {video_filename}. Please add to server/stream/ folder."
+        )
+    
+    # Start tracking if not already started
+    if not tracking_manager.is_tracking(camera_id):
+        success = tracking_manager.start_tracking(
+            camera_id=camera_id,
+            video_path=str(video_path),
+            conf_threshold=0.25,
+            iou_threshold=0.45,
+            frame_skip=1,  # Process all frames for smooth tracking
+            resize_width=None,  # No resize for better quality (can adjust for performance)
+            max_fps=30,
+            owner_id=owner_id  # Pass owner_id to load barrier zones
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to start tracking for camera: {camera_id}"
+            )
+        
+        print(f"🎯 Started tracking for {camera_id} with video: {video_filename}")
+    else:
+        print(f"ℹ️  Tracking already active for {camera_id}, reusing processor")
+    
+    async def generate_tracked_stream():
+        """Generator for MJPEG stream with tracking annotations."""
+        try:
+            # Wait a bit for first frame to be processed
+            await asyncio.sleep(0.5)
+            
+            frame_count = 0
+            while True:
+                # Get annotated frame from tracking processor
+                frame = tracking_manager.get_annotated_frame(camera_id)
+                
+                if frame is not None:
+                    # Encode as JPEG
+                    ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if ret:
+                        # MJPEG format
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + 
+                               buffer.tobytes() + b'\r\n')
+                        frame_count += 1
+                    
+                    # Log every 100 frames
+                    if frame_count % 100 == 0:
+                        stats = tracking_manager.get_stats(camera_id)
+                        if stats:
+                            print(f"📊 {camera_id}: FPS={stats['fps']:.1f}, Objects={stats['objects_tracked']}, Unique={stats['unique_tracks_count']}")
+                else:
+                    # No frame yet, wait a bit
+                    await asyncio.sleep(0.01)
+                
+                # Control stream FPS (~30 FPS)
+                await asyncio.sleep(0.033)
+                
+        except asyncio.CancelledError:
+            print(f"⚠️  Stream cancelled for {camera_id}")
+            # Don't stop tracking here - might have multiple clients
+            raise
+        except Exception as e:
+            print(f"❌ Tracking stream error for {camera_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    return StreamingResponse(
+        generate_tracked_stream(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
+
 # ========== AI DETECTION APIs ==========
 @app.post("/api/plate-detect")
 async def detect_license_plate(request: dict):
@@ -331,11 +495,26 @@ async def detect_license_plate_from_video(request: dict):
 
         print(f"📥 Detecting plate from video file: {video_path.name} (time_ms={time_ms}, frame_index={frame_index})")
 
-        result = await ai_service.detect_plate_from_video_file(
-            video_path=video_path,
-            time_ms=time_ms,
-            frame_index=frame_index,
-        )
+        # Ưu tiên lấy frame mới nhất từ buffer (nếu đang stream)
+        buffered_frame = video_buffer_manager.get_frame(video_path.name)
+        if buffered_frame is not None:
+            print("🔄 Using buffered frame (last_frame) for ALPR (buffer takes precedence)")
+            result = await ai_service.alpr_service.detect_plate_from_frame(buffered_frame)
+            # Lưu lại ảnh buffer đang dùng để debug
+            try:
+                debug_path = Path(__file__).parent / "last_buffer_frame.png"
+                cv2.imwrite(str(debug_path), buffered_frame)
+                result["debugImagePath"] = str(debug_path)
+            except Exception as debug_err:
+                print(f"⚠️ Cannot save debug buffer frame: {debug_err}")
+            result["usedBuffer"] = True
+        else:
+            result = await ai_service.detect_plate_from_video_file(
+                video_path=video_path,
+                time_ms=time_ms,
+                frame_index=frame_index,
+            )
+            result["usedBuffer"] = False
 
         # Lưu vào Firebase
         if result.get("plates"):
@@ -526,6 +705,245 @@ async def get_plate_history(limit: int = 50):
     try:
         plates = await firebase_service.get_plate_history(limit=limit)
         return {"success": True, "plates": plates}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== PLATE-TO-TRACK ASSIGNMENT ENDPOINTS ==========
+@app.post("/api/plate-tracking/assign")
+async def assign_plate_to_track(request: dict):
+    """
+    Assign license plate to vehicle at barrier.
+    Called after check-in OCR completes.
+    
+    Input: {
+        "plate": "51A-12345",
+        "cameraId": "CAM_B"  # Tracking camera ID (not check-in camera)
+    }
+    """
+    try:
+        plate = request.get("plate")
+        camera_id = request.get("cameraId")
+        
+        if not plate or not camera_id:
+            raise HTTPException(status_code=400, detail="plate and cameraId are required")
+        
+        # Get vehicles in barrier zone for this camera
+        vehicles_in_barrier = tracking_manager.get_vehicles_in_barrier(camera_id)
+        
+        if vehicles_in_barrier is None:
+            raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found or not tracking")
+        
+        if not vehicles_in_barrier:
+            return {
+                "success": False,
+                "error": "No vehicles detected in barrier zone",
+                "message": "Please wait for vehicle to enter barrier zone"
+            }
+        
+        # Assign to first vehicle in barrier (or could use heuristics like closest to center)
+        vehicle = vehicles_in_barrier[0]
+        track_id = vehicle['track_id']
+        bbox = vehicle['bbox']
+        
+        # Assign plate to track
+        success = plate_assigner.assign_plate_to_track(
+            plate=plate,
+            track_id=track_id,
+            camera_id=camera_id,
+            bbox=bbox
+        )
+        
+        if success:
+            return {
+                "success": True,
+                "message": f"Assigned plate '{plate}' to Track ID {track_id}",
+                "track_id": track_id,
+                "vehicle": vehicle
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"Track ID {track_id} already has a plate assigned"
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Plate assignment error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/plate-tracking/mappings")
+async def get_plate_mappings(camera_id: str = Query(None, description="Filter by camera (optional)")):
+    """
+    Get all plate-to-track mappings.
+    
+    Query params:
+    - camera_id: Filter by camera (optional)
+    
+    Returns all active mappings.
+    """
+    try:
+        all_assignments = plate_assigner.get_all_assignments()
+        
+        # Filter by camera if specified
+        if camera_id:
+            filtered = {
+                plate: metadata
+                for plate, metadata in all_assignments.items()
+                if metadata.get('camera_id') == camera_id
+            }
+            return {
+                "success": True,
+                "camera_id": camera_id,
+                "count": len(filtered),
+                "assignments": filtered
+            }
+        else:
+            return {
+                "success": True,
+                "count": len(all_assignments),
+                "assignments": all_assignments
+            }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/plate-tracking/vehicles-in-barrier")
+async def get_vehicles_in_barrier(camera_id: str = Query(..., description="Camera ID")):
+    """
+    Get vehicles currently in barrier zone for a camera.
+    Used for debugging and manual assignment.
+    """
+    try:
+        vehicles = tracking_manager.get_vehicles_in_barrier(camera_id)
+        
+        if vehicles is None:
+            raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
+        
+        return {
+            "success": True,
+            "camera_id": camera_id,
+            "count": len(vehicles),
+            "vehicles": vehicles
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/plate-tracking/remove")
+async def remove_plate_assignment(plate: str = Query(..., description="License plate to remove")):
+    """Remove a plate assignment."""
+    try:
+        success = plate_assigner.remove_assignment(plate)
+        
+        if success:
+            return {"success": True, "message": f"Removed assignment for plate '{plate}'"}
+        else:
+            return {"success": False, "error": f"Plate '{plate}' not found"}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== TRACKING CONTROL ENDPOINTS ==========
+@app.post("/api/tracking/start")
+async def start_tracking(request: dict):
+    """
+    Start tracking for a camera.
+    Input: { 
+      "camera_id": "cam1", 
+      "video_file": "parking_a.mp4",
+      "owner_id": "user123" (optional - để load barrier zones)
+    }
+    """
+    try:
+        camera_id = request.get("camera_id")
+        video_file = request.get("video_file")
+        owner_id = request.get("owner_id")  # Optional
+        
+        if not camera_id or not video_file:
+            raise HTTPException(status_code=400, detail="camera_id and video_file are required")
+        
+        # Get video path
+        stream_folder = Path(__file__).parent / "stream"
+        video_path = stream_folder / video_file
+        
+        if not video_path.exists():
+            raise HTTPException(status_code=404, detail=f"Video file not found: {video_file}")
+        
+        # Start tracking (with owner_id to load barrier zones)
+        success = tracking_manager.start_tracking(
+            camera_id=camera_id,
+            video_path=str(video_path),
+            conf_threshold=0.25,
+            iou_threshold=0.45,
+            frame_skip=1,
+            max_fps=30,
+            owner_id=owner_id
+        )
+        
+        if success:
+            return {"success": True, "message": f"Tracking started for {camera_id}"}
+        else:
+            return {"success": False, "error": "Failed to start tracking"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tracking/stop")
+async def stop_tracking(request: dict):
+    """
+    Stop tracking for a camera.
+    Input: { "camera_id": "cam1" }
+    """
+    try:
+        camera_id = request.get("camera_id")
+        
+        if not camera_id:
+            raise HTTPException(status_code=400, detail="camera_id is required")
+        
+        success = tracking_manager.stop_tracking(camera_id)
+        
+        if success:
+            return {"success": True, "message": f"Tracking stopped for {camera_id}"}
+        else:
+            return {"success": False, "error": "Camera not being tracked"}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tracking/stats")
+async def get_tracking_stats(camera_id: str = Query(None, description="Camera ID (optional, returns all if not specified)")):
+    """
+    Get tracking statistics.
+    
+    Query params:
+    - camera_id: Get stats for specific camera (optional)
+    
+    Returns stats for specific camera or all active cameras.
+    """
+    try:
+        if camera_id:
+            # Get stats for specific camera
+            stats = tracking_manager.get_stats(camera_id)
+            if stats is None:
+                return {"success": False, "error": f"Camera {camera_id} not found or not tracking"}
+            return {"success": True, "camera_id": camera_id, "stats": stats}
+        else:
+            # Get stats for all cameras
+            all_stats = tracking_manager.get_all_stats()
+            active_cameras = tracking_manager.get_active_cameras()
+            return {
+                "success": True,
+                "active_cameras": active_cameras,
+                "stats": all_stats
+            }
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

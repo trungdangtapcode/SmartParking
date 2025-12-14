@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { BarrierZone } from '../services/detectionService';
 
 interface ParkingSpace {
   id: string;
@@ -24,9 +25,34 @@ interface ParkingMap2DProps {
   zoom?: number; // Zoom level from parent
   onZoomChange?: (zoom: number) => void; // Callback to update zoom in parent
   previewMode?: boolean; // If true, disable interactions and hide instructions
+  // NEW: Barrier zones support
+  barrierZones?: {
+    entry?: BarrierZone;
+    exit?: BarrierZone;
+  };
+  drawMode?: 'space' | 'entry' | 'exit';
+  onBarrierZoneAdd?: (type: 'entry' | 'exit', bbox: [number, number, number, number]) => void;
+  onBarrierZoneDelete?: (type: 'entry' | 'exit') => void;
 }
 
-export function ParkingMap2D({ spaces, selectedSpaceId, onSpaceSelect, onSpaceDelete, onSpaceAdd, imageWidth, imageHeight, sourceImageUrl, zoom: parentZoom, onZoomChange, previewMode = false }: ParkingMap2DProps) {
+export function ParkingMap2D({ 
+  spaces, 
+  selectedSpaceId, 
+  onSpaceSelect, 
+  onSpaceDelete, 
+  onSpaceAdd, 
+  imageWidth, 
+  imageHeight, 
+  sourceImageUrl, 
+  zoom: parentZoom, 
+  onZoomChange, 
+  previewMode = false,
+  // NEW: Barrier zones props
+  barrierZones,
+  drawMode = 'space',
+  onBarrierZoneAdd,
+  onBarrierZoneDelete,
+}: ParkingMap2DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [zoom, setZoom] = useState(parentZoom || 1);
   
@@ -178,6 +204,53 @@ export function ParkingMap2D({ spaces, selectedSpaceId, onSpaceSelect, onSpaceDe
       return;
     }
 
+    // Draw barrier zones FIRST (behind parking spaces)
+    if (barrierZones?.entry) {
+      const [x, y, w, h] = barrierZones.entry.bbox;
+      const opacity = showOriginalImage ? 0.15 : 0.2;
+      
+      // Fill with semi-transparent green
+      ctx.fillStyle = `rgba(16, 185, 129, ${opacity})`;
+      ctx.fillRect(x, y, w, h);
+      
+      // Border
+      ctx.strokeStyle = 'rgba(16, 185, 129, 0.8)';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 5]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+      
+      // Label
+      ctx.fillStyle = 'rgba(16, 185, 129, 1)';
+      ctx.font = 'bold 24px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText('ENTRY', x + 10, y + 10);
+    }
+    
+    if (barrierZones?.exit) {
+      const [x, y, w, h] = barrierZones.exit.bbox;
+      const opacity = showOriginalImage ? 0.15 : 0.2;
+      
+      // Fill with semi-transparent red
+      ctx.fillStyle = `rgba(239, 68, 68, ${opacity})`;
+      ctx.fillRect(x, y, w, h);
+      
+      // Border
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 5]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+      
+      // Label
+      ctx.fillStyle = 'rgba(239, 68, 68, 1)';
+      ctx.font = 'bold 24px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText('EXIT', x + 10, y + 10);
+    }
+
     // Draw parking spaces using original coordinates (no normalization)
     spaces.forEach(space => {
       const [x, y, w, h] = space.bbox;
@@ -253,8 +326,15 @@ export function ParkingMap2D({ spaces, selectedSpaceId, onSpaceSelect, onSpaceDe
       const previewOpacity = showOriginalImage ? 0.8 : 1.0;
       const previewFillOpacity = showOriginalImage ? 0.2 : (pendingSpace ? 0.2 : 0.15);
       
-      if (pendingSpace) {
-        ctx.strokeStyle = `rgba(59, 130, 246, ${previewOpacity})`;
+      // Color based on draw mode
+      if (drawMode === 'entry') {
+        ctx.strokeStyle = `rgba(16, 185, 129, ${previewOpacity})`; // Green
+        ctx.fillStyle = `rgba(16, 185, 129, ${previewFillOpacity})`;
+      } else if (drawMode === 'exit') {
+        ctx.strokeStyle = `rgba(239, 68, 68, ${previewOpacity})`; // Red
+        ctx.fillStyle = `rgba(239, 68, 68, ${previewFillOpacity})`;
+      } else if (pendingSpace) {
+        ctx.strokeStyle = `rgba(59, 130, 246, ${previewOpacity})`; // Blue
         ctx.fillStyle = `rgba(59, 130, 246, ${previewFillOpacity})`;
       } else {
         // Use bright cyan color for better visibility when dragging
@@ -276,7 +356,7 @@ export function ParkingMap2D({ spaces, selectedSpaceId, onSpaceSelect, onSpaceDe
   // Redraw when spaces or selection changes
   useEffect(() => {
     drawMap();
-  }, [spaces, selectedSpaceId, zoom, isDrawing, drawStart, drawCurrent, pendingSpace, imageWidth, imageHeight, showOriginalImage, panOffset]);
+  }, [spaces, selectedSpaceId, zoom, isDrawing, drawStart, drawCurrent, pendingSpace, imageWidth, imageHeight, showOriginalImage, panOffset, barrierZones, drawMode]);
 
   // Handle wheel event with passive: false to prevent default scroll
   useEffect(() => {
@@ -487,55 +567,60 @@ export function ParkingMap2D({ spaces, selectedSpaceId, onSpaceSelect, onSpaceDe
       const width = Math.abs(drawCurrent.x - drawStart.x);
       const height = Math.abs(drawCurrent.y - drawStart.y);
 
-      // Only show confirm if box is large enough
+      // Only process if box is large enough
       if (width > 10 && height > 10) {
-        // Calculate button position (center below the box)
-        const containerRect = containerRef.current?.getBoundingClientRect();
-        const canvasRect = canvas.getBoundingClientRect();
-        if (containerRect && canvasRect) {
-          // Position button at center bottom of the drawn box in image coordinates
-          const boxCenterX = x + width / 2;
-          const boxBottomY = y + height + 20; // 20px below box
-          
-          // Convert image coordinates to screen coordinates
-          // Apply the same transform as in drawMap: translate(center), scale(zoom), translate(-center), translate(pan)
-          const centerX = canvas.width / 2;
-          const centerY = canvas.height / 2;
-          
-          // Transform: (boxCenterX - centerX) * zoom + centerX + panOffset
-          const transformedX = (boxCenterX - centerX) * zoom + centerX + panOffset.x;
-          const transformedY = (boxBottomY - centerY) * zoom + centerY + panOffset.y;
-          
-          // Convert canvas coordinates to screen coordinates (account for display scaling)
-          const scaleX = canvasRect.width / canvas.width;
-          const scaleY = canvasRect.height / canvas.height;
-          const screenX = transformedX * scaleX;
-          const screenY = transformedY * scaleY;
-          
-          // Convert to container-relative coordinates
-          const buttonX = screenX + (canvasRect.left - containerRect.left);
-          const buttonY = screenY + (canvasRect.top - containerRect.top);
-          
-          // Ensure buttons are visible within viewport
-          const buttonWidth = 180; // Approximate width of both buttons
-          const buttonHeight = 40; // Approximate height
-          const padding = 10;
-          
-          // Clamp to viewport bounds
-          const clampedX = Math.max(
-            padding,
-            Math.min(buttonX - buttonWidth / 2, containerRect.width - buttonWidth - padding)
-          );
-          const clampedY = Math.max(
-            padding,
-            Math.min(buttonY, containerRect.height - buttonHeight - padding)
-          );
+        // For barrier zones, add immediately (no confirm needed)
+        if (drawMode === 'entry' || drawMode === 'exit') {
+          onBarrierZoneAdd?.(drawMode, [x, y, width, height]);
+        } else {
+          // For parking spaces, show confirm button
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          const canvasRect = canvas.getBoundingClientRect();
+          if (containerRect && canvasRect) {
+            // Position button at center bottom of the drawn box in image coordinates
+            const boxCenterX = x + width / 2;
+            const boxBottomY = y + height + 20; // 20px below box
+            
+            // Convert image coordinates to screen coordinates
+            // Apply the same transform as in drawMap: translate(center), scale(zoom), translate(-center), translate(pan)
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            // Transform: (boxCenterX - centerX) * zoom + centerX + panOffset
+            const transformedX = (boxCenterX - centerX) * zoom + centerX + panOffset.x;
+            const transformedY = (boxBottomY - centerY) * zoom + centerY + panOffset.y;
+            
+            // Convert canvas coordinates to screen coordinates (account for display scaling)
+            const scaleX = canvasRect.width / canvas.width;
+            const scaleY = canvasRect.height / canvas.height;
+            const screenX = transformedX * scaleX;
+            const screenY = transformedY * scaleY;
+            
+            // Convert to container-relative coordinates
+            const buttonX = screenX + (canvasRect.left - containerRect.left);
+            const buttonY = screenY + (canvasRect.top - containerRect.top);
+            
+            // Ensure buttons are visible within viewport
+            const buttonWidth = 180; // Approximate width of both buttons
+            const buttonHeight = 40; // Approximate height
+            const padding = 10;
+            
+            // Clamp to viewport bounds
+            const clampedX = Math.max(
+              padding,
+              Math.min(buttonX - buttonWidth / 2, containerRect.width - buttonWidth - padding)
+            );
+            const clampedY = Math.max(
+              padding,
+              Math.min(buttonY, containerRect.height - buttonHeight - padding)
+            );
 
-          console.log('Setting pending space:', { bbox: [x, y, width, height] });
-          setPendingSpace({
-            bbox: [x, y, width, height],
-            buttonPosition: { x: clampedX, y: clampedY }
-          });
+            console.log('Setting pending space:', { bbox: [x, y, width, height] });
+            setPendingSpace({
+              bbox: [x, y, width, height],
+              buttonPosition: { x: clampedX, y: clampedY }
+            });
+          }
         }
       }
     }

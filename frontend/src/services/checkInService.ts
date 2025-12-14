@@ -5,6 +5,26 @@ import type { SavePlateDetectionPayload } from './plateDetectionService';
 
 const API_BASE = API_CONFIG.baseURL;
 
+async function compressDataUrlToJpeg(dataUrl: string, quality = 0.7): Promise<string> {
+  try {
+    if (!dataUrl) return dataUrl;
+    const img = new Image();
+    img.src = dataUrl;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    ctx.drawImage(img, 0, 0);
+    const jpegDataUrl = canvas.toDataURL('image/jpeg', quality);
+    return jpegDataUrl || dataUrl;
+  } catch (e) {
+    console.warn('⚠️ Compress data URL failed, fallback to original', e);
+    return dataUrl;
+  }
+}
+
 export interface CheckInResult {
   success: boolean;
   vehicleId?: string;
@@ -64,15 +84,18 @@ export async function performVehicleCheckInFromVideoFile(
 
     onProgress?.('Đang lưu kết quả OCR...', 85);
 
+    // Compress annotated image to avoid Firestore size limits
+    const compressedAnnotated = await compressDataUrlToJpeg(ocrData.annotatedImage, 0.7);
+
     const plateDetectionPayload: SavePlateDetectionPayload = {
       ownerId,
       parkingId,
       cameraId,
       plateText: licensePlate,
       confidence: bestPlate.confidence,
-      // Không có ảnh gốc từ frontend; dùng annotatedImage (PNG) làm input lưu trữ tạm
-      inputImageUrl: ocrData.annotatedImage,
-      annotatedImageUrl: ocrData.annotatedImage,
+      // Dùng bản nén JPEG để giảm kích thước
+      inputImageUrl: compressedAnnotated,
+      annotatedImageUrl: compressedAnnotated,
     };
 
     const savePlateResult = await savePlateDetection(plateDetectionPayload);
@@ -87,7 +110,8 @@ export async function performVehicleCheckInFromVideoFile(
       parkingId,
       cameraId,
       ownerId,
-      entryImage: ocrData.annotatedImage,
+      // Tránh vượt giới hạn Firestore (1MB); bỏ entryImage gốc (PNG lớn)
+      entryImage: undefined,
     });
 
     if (!checkInResult.success) {

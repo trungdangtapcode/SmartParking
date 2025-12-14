@@ -12,6 +12,7 @@ import {
   fetchDetectionByCamera,
   type SavedSpace,
   type DetectionRecord,
+  type BarrierZone,
 } from '../services/detectionService';
 import { getParkingLotsByOwner, getParkingLot } from '../services/parkingLotService';
 import type { ParkingLot } from '../types/parkingLot.types';
@@ -112,6 +113,13 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
   const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
   const [sourceImageUrl, setSourceImageUrl] = useState<string | undefined>(undefined);
   const [zoom, setZoom] = useState(1);
+  
+  // NEW: Barrier zones state
+  const [barrierZones, setBarrierZones] = useState<{
+    entry?: BarrierZone;
+    exit?: BarrierZone;
+  }>({});
+  const [drawMode, setDrawMode] = useState<'space' | 'entry' | 'exit'>('space');
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const [cameraId, setCameraId] = useState('');
   const [parkingLotId, setParkingLotId] = useState('');
@@ -701,14 +709,18 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
       {
         ownerId,
         parkingId: parkingLotId.trim(),
-      }
+      },
+      barrierZones // Pass barrier zones
     );
     
     if (result.success) {
       const alertInfo = result.alertsCreated && result.alertsCreated > 0
         ? ` | 🚨 ${result.alertsCreated} alert(s)`
         : '';
-      const message = `✅ Saved ${spaces.length} spaces for ${activeCameraId}/${parkingLotId.trim()}${alertInfo}`;
+      const barrierInfo = (barrierZones.entry || barrierZones.exit) 
+        ? ` | 🚪 ${barrierZones.entry ? 'Entry' : ''}${barrierZones.entry && barrierZones.exit ? '+' : ''}${barrierZones.exit ? 'Exit' : ''} zones`
+        : '';
+      const message = `✅ Saved ${spaces.length} spaces for ${activeCameraId}/${parkingLotId.trim()}${alertInfo}${barrierInfo}`;
       setSaveMessage(message);
       alert(message);
     } else {
@@ -999,6 +1011,79 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
             >
             {spaces.length > 0 ? (
               <div className="flex-1 flex flex-col min-h-0 w-full">
+                {/* Draw Mode Toggle Buttons */}
+                {isEditing && (
+                  <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex flex-col gap-2">
+                    <div className="flex gap-2 flex-wrap">
+                      <button
+                        onClick={() => setDrawMode('space')}
+                        className={`flex items-center gap-1 px-3 py-2 rounded-lg font-medium text-sm transition ${
+                          drawMode === 'space'
+                            ? 'bg-blue-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
+                        }`}
+                      >
+                        🅿️ Draw Spaces
+                      </button>
+                      <button
+                        onClick={() => setDrawMode('entry')}
+                        className={`flex items-center gap-1 px-3 py-2 rounded-lg font-medium text-sm transition ${
+                          drawMode === 'entry'
+                            ? 'bg-green-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
+                        }`}
+                      >
+                        🚪 Entry Zone
+                      </button>
+                      <button
+                        onClick={() => setDrawMode('exit')}
+                        className={`flex items-center gap-1 px-3 py-2 rounded-lg font-medium text-sm transition ${
+                          drawMode === 'exit'
+                            ? 'bg-red-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
+                        }`}
+                      >
+                        🚪 Exit Zone
+                      </button>
+                    </div>
+                    
+                    {/* Barrier Zones Status */}
+                    <div className="text-xs space-y-1">
+                      {barrierZones.entry && (
+                        <div className="flex items-center gap-2 text-green-700">
+                          <span>✅ Entry Zone defined</span>
+                          <button
+                            onClick={() => {
+                              setBarrierZones(prev => ({ ...prev, entry: undefined }));
+                            }}
+                            className="text-red-600 hover:underline"
+                          >
+                            (Remove)
+                          </button>
+                        </div>
+                      )}
+                      {barrierZones.exit && (
+                        <div className="flex items-center gap-2 text-red-700">
+                          <span>✅ Exit Zone defined</span>
+                          <button
+                            onClick={() => {
+                              setBarrierZones(prev => ({ ...prev, exit: undefined }));
+                            }}
+                            className="text-red-600 hover:underline"
+                          >
+                            (Remove)
+                          </button>
+                        </div>
+                      )}
+                      {!barrierZones.entry && !barrierZones.exit && (
+                        <div className="text-gray-500">
+                          💡 Tip: Draw entry/exit zones for tracking
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
                 <ParkingMap2D
                   spaces={spaces}
                   selectedSpaceId={selectedSpaceId}
@@ -1024,6 +1109,23 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
                   sourceImageUrl={sourceImageUrl}
                   zoom={zoom}
                   onZoomChange={setZoom}
+                  // NEW: Barrier zones props
+                  barrierZones={barrierZones}
+                  drawMode={drawMode}
+                  onBarrierZoneAdd={(type, bbox) => {
+                    const newZone: BarrierZone = {
+                      id: `${type}-zone-${Date.now()}`,
+                      bbox,
+                      type,
+                      label: type === 'entry' ? 'Entry Gate' : 'Exit Gate',
+                    };
+                    setBarrierZones(prev => ({ ...prev, [type]: newZone }));
+                    // Switch back to space mode after drawing
+                    setDrawMode('space');
+                  }}
+                  onBarrierZoneDelete={(type) => {
+                    setBarrierZones(prev => ({ ...prev, [type]: undefined }));
+                  }}
                 />
               </div>
             ) : (

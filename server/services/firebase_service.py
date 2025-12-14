@@ -272,6 +272,41 @@ class FirebaseService:
             print(f"❌ Error getting detections: {e}")
             return []
     
+    # ========== DETECTION RECORDS (Parking Spaces + Barrier Zones) ==========
+    
+    def get_detection_by_id(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get detection record by document ID.
+        
+        Args:
+            doc_id: Document ID (format: {ownerId}__{cameraId})
+        
+        Returns:
+            Detection record or None if not found
+        """
+        if not self.db:
+            print("⚠️  Firebase not initialized")
+            return None
+        
+        try:
+            doc_ref = self.db.collection("detections").document(doc_id)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                print(f"✅ Found detection record: {doc_id}")
+                return data
+            else:
+                print(f"⚠️  Detection record not found: {doc_id}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error getting detection by ID: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
     # ========== PARKING SPACES (cho future features) ==========
     
     async def save_parking_space(self, space_data: Dict[str, Any]) -> str:

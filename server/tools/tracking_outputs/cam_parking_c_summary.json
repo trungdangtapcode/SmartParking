@@ -1,0 +1,15 @@
+{
+  "camera": "cam_parking_c",
+  "name": "Parking C (Overhead)",
+  "is_barrier_front": false,
+  "video": "F:\\KHKT2025\\AIIII\\WEB\\SmartParking\\server\\tools\\tracking_outputs\\cam_parking_c_tracked.mp4",
+  "stats": {
+    "total_frames": 4300,
+    "processed_frames": 4300,
+    "detected_frames": 2150,
+    "unique_tracks": 25,
+    "fps": 29,
+    "video_width": 1280,
+    "video_height": 720
+  }
+}

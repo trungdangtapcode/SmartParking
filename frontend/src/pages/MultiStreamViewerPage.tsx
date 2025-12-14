@@ -46,12 +46,14 @@ interface StreamTileConfig {
   parkingId?: string; // NEW: Parking Lot ID
   cameraId?: string; // NEW: Camera ID
   isCheckInCamera?: boolean; // NEW: Is this the check-in camera (Cam1)?
+  trackingEnabled?: boolean; // NEW: Enable real-time tracking
 }
 
 interface StreamTileProps extends StreamTileConfig {
   onRemove: (id: string) => void;
   isStreaming: boolean;
   ownerId?: string; // NEW: Owner ID for check-in
+  onToggleTracking?: (id: string, enabled: boolean) => void; // NEW: Tracking toggle callback
 }
 
 // ============================================
@@ -68,6 +70,8 @@ function StreamViewerTile({
   cameraId,
   isCheckInCamera,
   ownerId,
+  trackingEnabled,
+  onToggleTracking,
 }: StreamTileProps) {
   const [status, setStatus] = useState<TileStatus>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +82,14 @@ function StreamViewerTile({
   const [progress, setProgress] = useState<{ stage: string; percentage: number } | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const streamStartRef = useRef<number | null>(null);
+  
+  // NEW: Tracking states
+  const [trackingStats, setTrackingStats] = useState<{
+    fps: number;
+    objects_tracked: number;
+    unique_tracks_count: number;
+    latency_ms: number;
+  } | null>(null);
 
   useEffect(() => {
     if (isStreaming && streamStartRef.current === null) {
@@ -85,8 +97,38 @@ function StreamViewerTile({
     }
     if (!isStreaming) {
       streamStartRef.current = null;
+      setTrackingStats(null); // Clear stats when stopped
     }
   }, [isStreaming]);
+  
+  // NEW: Poll tracking stats when tracking is enabled
+  useEffect(() => {
+    if (!trackingEnabled || !isStreaming || !cameraId) {
+      setTrackingStats(null);
+      return;
+    }
+    
+    // Poll stats every 2 seconds
+    const pollStats = async () => {
+      try {
+        const response = await fetch(`${FASTAPI_BASE}/api/tracking/stats?camera_id=${cameraId}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.stats) {
+            setTrackingStats(data.stats);
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to fetch tracking stats:', error);
+      }
+    };
+    
+    // Poll immediately and then every 2 seconds
+    pollStats();
+    const interval = setInterval(pollStats, 2000);
+    
+    return () => clearInterval(interval);
+  }, [trackingEnabled, isStreaming, cameraId]);
 
   const handleImageError = () => {
     setStatus('error');
@@ -252,6 +294,9 @@ function StreamViewerTile({
             licensePlate: result.licensePlate,
           });
           
+          // NEW: Auto-assign plate to tracking camera
+          await assignPlateToTracking(result.licensePlate);
+          
           alert(`✅ Check-in thành công!\nBiển số: ${result.licensePlate}\nVehicle ID: ${result.vehicleId}`);
         } else {
           setCheckInResult({ error: result.error || 'Check-in failed' });
@@ -298,6 +343,9 @@ function StreamViewerTile({
           licensePlate: result.licensePlate,
         });
         
+        // NEW: Auto-assign plate to tracking camera
+        await assignPlateToTracking(result.licensePlate);
+        
         alert(`✅ Check-in thành công!\nBiển số: ${result.licensePlate}\nVehicle ID: ${result.vehicleId}`);
       } else {
         setCheckInResult({ error: result.error || 'Check-in failed' });
@@ -318,6 +366,59 @@ function StreamViewerTile({
       }, 3000);
     } finally {
       setIsCheckingIn(false);
+    }
+  };
+  
+  // NEW: Assign plate to tracking camera
+  const assignPlateToTracking = async (plate: string) => {
+    try {
+      console.log(`🏷️  Assigning plate ${plate} to tracking camera...`);
+      
+      // Find a tracking camera with tracking enabled (not check-in camera)
+      // In real app, should specify which tracking camera corresponds to this check-in
+      // For now, we'll try to assign to the first tracking camera we can find
+      
+      // Try to get active tracking cameras from tiles
+      const trackingCameras = tiles.filter(tile => 
+        !tile.isCheckInCamera && 
+        tile.trackingEnabled &&
+        tile.cameraId
+      );
+      
+      if (trackingCameras.length === 0) {
+        console.warn('⚠️  No tracking cameras found. Please enable tracking on a camera first.');
+        return;
+      }
+      
+      // Try each tracking camera until we find one with vehicles in barrier
+      for (const trackingCam of trackingCameras) {
+        const response = await fetch(
+          `${FASTAPI_BASE}/api/plate-tracking/assign`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              plate: plate,
+              cameraId: trackingCam.cameraId
+            })
+          }
+        );
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          console.log(`✅ Plate ${plate} assigned to Track ID ${data.track_id} on ${trackingCam.cameraId}`);
+          return; // Success, stop trying other cameras
+        } else {
+          console.log(`⚠️  Could not assign to ${trackingCam.cameraId}: ${data.error || data.message}`);
+          // Continue to next camera
+        }
+      }
+      
+      console.warn('⚠️  Could not assign plate to any tracking camera (no vehicles in barrier zone)');
+    } catch (error) {
+      console.error('❌ Plate assignment error:', error);
+      // Don't show error to user - this is background operation
     }
   };
 
@@ -397,7 +498,11 @@ function StreamViewerTile({
           <>
             <img
               ref={imgRef}
-              src={streamUrl}
+              src={
+                isStreaming && trackingEnabled && !isCheckInCamera && cameraId
+                  ? `${streamUrl}&tracking=true&camera_id=${cameraId}&owner_id=${ownerId || ''}`
+                  : streamUrl
+              }
               alt={label}
               className="w-full h-full object-contain"
               onError={handleImageError}
@@ -438,6 +543,70 @@ function StreamViewerTile({
         )}
       </div>
 
+      {/* Tracking Section (only for non-check-in cameras, video mode only) */}
+      {!isCheckInCamera && sourceType === 'video' && (
+        <div className="px-4 py-3 bg-gradient-to-r from-purple-50 to-pink-50 border-t border-purple-200 space-y-2">
+          {/* Tracking Toggle */}
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={trackingEnabled || false}
+                onChange={(e) => onToggleTracking?.(id, e.target.checked)}
+                disabled={!isStreaming || !cameraId}
+                className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
+              />
+              <span className="text-sm font-semibold text-purple-900">
+                🎯 Enable Tracking
+              </span>
+            </label>
+            
+            {trackingEnabled && (
+              <span className="px-2 py-1 bg-purple-500 text-white rounded-full text-xs font-bold animate-pulse">
+                TRACKING
+              </span>
+            )}
+          </div>
+          
+          {/* Tracking Statistics */}
+          {trackingEnabled && isStreaming && trackingStats && (
+            <div className="grid grid-cols-4 gap-2 text-xs mt-2">
+              <div className="bg-white rounded p-2 border border-purple-200">
+                <div className="text-purple-700 font-medium">FPS</div>
+                <div className="text-lg font-bold text-purple-900">
+                  {trackingStats.fps.toFixed(1)}
+                </div>
+              </div>
+              <div className="bg-white rounded p-2 border border-purple-200">
+                <div className="text-purple-700 font-medium">Objects</div>
+                <div className="text-lg font-bold text-purple-900">
+                  {trackingStats.objects_tracked}
+                </div>
+              </div>
+              <div className="bg-white rounded p-2 border border-purple-200">
+                <div className="text-purple-700 font-medium">Unique</div>
+                <div className="text-lg font-bold text-purple-900">
+                  {trackingStats.unique_tracks_count}
+                </div>
+              </div>
+              <div className="bg-white rounded p-2 border border-purple-200">
+                <div className="text-purple-700 font-medium">Latency</div>
+                <div className="text-lg font-bold text-purple-900">
+                  {trackingStats.latency_ms.toFixed(0)}ms
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Info */}
+          {!cameraId && (
+            <p className="text-xs text-purple-700 bg-purple-100 rounded p-2 mt-2">
+              ⚠️ Vui lòng nhập Camera ID để enable tracking
+            </p>
+          )}
+        </div>
+      )}
+      
       {/* Check-in Section */}
       {isCheckInCamera && (
         <div className="px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-t border-blue-200 space-y-2">
@@ -760,6 +929,53 @@ export function MultiStreamViewerPage() {
     }
   };
 
+  // NEW: Handle tracking toggle
+  const handleToggleTracking = (tileId: string, enabled: boolean) => {
+    setTiles(prev => prev.map(tile => 
+      tile.id === tileId 
+        ? { ...tile, trackingEnabled: enabled }
+        : tile
+    ));
+  };
+  
+  // NEW: Stop tracking for a specific camera
+  const stopTracking = async (cameraId: string) => {
+    if (!cameraId) return;
+    
+    try {
+      console.log(`🛑 Stopping tracking for camera: ${cameraId}`);
+      const response = await fetch(`${FASTAPI_BASE}/api/tracking/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_id: cameraId })
+      });
+      
+      if (response.ok) {
+        console.log(`✅ Stopped tracking for ${cameraId}`);
+      } else {
+        console.warn(`⚠️ Failed to stop tracking for ${cameraId}`);
+      }
+    } catch (error) {
+      console.error(`❌ Error stopping tracking for ${cameraId}:`, error);
+    }
+  };
+  
+  // NEW: Stop all tracking cameras
+  const stopAllTracking = async () => {
+    const trackingCameras = tiles.filter(tile => 
+      tile.trackingEnabled && tile.cameraId && !tile.isCheckInCamera
+    );
+    
+    if (trackingCameras.length === 0) return;
+    
+    console.log(`🛑 Stopping tracking for ${trackingCameras.length} camera(s)...`);
+    
+    // Stop all in parallel
+    await Promise.all(
+      trackingCameras.map(tile => stopTracking(tile.cameraId!))
+    );
+  };
+  
   // Handle add tile
   const handleAddTile = () => {
     if (!selectedSourceId && sourceType !== 'mock') {
@@ -797,7 +1013,14 @@ export function MultiStreamViewerPage() {
   };
 
   // Handle remove tile
-  const handleRemoveTile = (idToRemove: string) => {
+  const handleRemoveTile = async (idToRemove: string) => {
+    const tileToRemove = tiles.find(t => t.id === idToRemove);
+    
+    // Stop tracking if this tile has tracking enabled
+    if (tileToRemove?.trackingEnabled && tileToRemove.cameraId && !tileToRemove.isCheckInCamera) {
+      await stopTracking(tileToRemove.cameraId);
+    }
+    
     setTiles((prev) => prev.filter((tile) => tile.id !== idToRemove));
   };
 
@@ -1233,7 +1456,13 @@ export function MultiStreamViewerPage() {
               <div className="flex items-center gap-3">
                 {/* START/STOP Button */}
                 <button
-                  onClick={() => setIsStreaming(!isStreaming)}
+                  onClick={async () => {
+                    if (isStreaming) {
+                      // Stopping: stop all tracking first
+                      await stopAllTracking();
+                    }
+                    setIsStreaming(!isStreaming);
+                  }}
                   className={`px-6 py-3 rounded-lg font-bold transition-all shadow-md ${
                     isStreaming
                       ? 'bg-red-500 text-white hover:bg-red-600 hover:shadow-lg'
@@ -1255,7 +1484,9 @@ export function MultiStreamViewerPage() {
                 
                 {/* Clear All Button */}
                 <button
-                  onClick={() => {
+                  onClick={async () => {
+                    // Stop all tracking before clearing
+                    await stopAllTracking();
                     setTiles([]);
                     setIsStreaming(false);
                   }}
@@ -1276,6 +1507,7 @@ export function MultiStreamViewerPage() {
                   onRemove={handleRemoveTile}
                   isStreaming={isStreaming}
                   ownerId={ownerId}
+                  onToggleTracking={handleToggleTracking}
                 />
               ))}
             </div>

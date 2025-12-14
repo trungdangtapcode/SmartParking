@@ -22,6 +22,13 @@ export interface SavedSpace {
   confidence: number;
 }
 
+export interface BarrierZone {
+  id: string;
+  bbox: [number, number, number, number]; // [x, y, width, height]
+  type: 'entry' | 'exit';
+  label?: string; // Optional label for display
+}
+
 export interface DetectionRecord {
   id: string;
   timestamp: Timestamp;
@@ -38,6 +45,11 @@ export interface DetectionRecord {
   inputImageUrl?: string | null;
   spaces?: SavedSpace[];
   updateCount?: number;
+  // NEW: Barrier zones for entry/exit tracking
+  barrierZones?: {
+    entry?: BarrierZone;
+    exit?: BarrierZone;
+  };
 }
 
 interface SaveDetectionOptions {
@@ -53,6 +65,7 @@ const buildDocId = (ownerId: string, cameraId: string) => `${ownerId}__${cameraI
  * Save parking spaces definition to Firestore (only latest per camera per owner)
  * 
  * PHASE 1 ONLY: Define parking spaces → Lưu vào field "spaces"
+ * PHASE 2: Barrier zones for entry/exit tracking
  * 
  * Note: Vehicle tracking sẽ được xử lý riêng bằng tracking system (không lưu vào đây)
  */
@@ -62,6 +75,7 @@ export async function saveDetectionRecord(
   inputImageUrl: string | undefined,
   spaces: SavedSpace[] | undefined,
   options: SaveDetectionOptions,
+  barrierZones?: { entry?: BarrierZone; exit?: BarrierZone },
 ): Promise<{ success: boolean; error?: string; docId?: string; alertsCreated?: number }> {
   try {
     if (!db) {
@@ -86,22 +100,30 @@ export async function saveDetectionRecord(
       confidence: d.score || 0,
     }));
 
-    await setDoc(
-      docRef,
-      {
-        timestamp: Timestamp.now(),
-        ownerId: options.ownerId,
-        cameraId,
-        parkingId: options.parkingId,
-        parking: options.parkingId, // backward compatibility
-        inputImageUrl: inputImageUrl || null,
-        // PHASE 1: Parking spaces (chỗ đỗ xe được định nghĩa)
-        spaces: finalSpaces,
-        spaceCount: finalSpaces.length,
-        updateCount: currentUpdateCount + 1,
-      },
-      { merge: false },
-    );
+    // Prepare data to save
+    const dataToSave: any = {
+      timestamp: Timestamp.now(),
+      ownerId: options.ownerId,
+      cameraId,
+      parkingId: options.parkingId,
+      parking: options.parkingId, // backward compatibility
+      inputImageUrl: inputImageUrl || null,
+      // PHASE 1: Parking spaces (chỗ đỗ xe được định nghĩa)
+      spaces: finalSpaces,
+      spaceCount: finalSpaces.length,
+      updateCount: currentUpdateCount + 1,
+    };
+
+    // PHASE 2: Barrier zones (if provided)
+    if (barrierZones && (barrierZones.entry || barrierZones.exit)) {
+      dataToSave.barrierZones = {
+        ...(barrierZones.entry && { entry: barrierZones.entry }),
+        ...(barrierZones.exit && { exit: barrierZones.exit }),
+      };
+      console.log(`✅ Saving barrier zones:`, dataToSave.barrierZones);
+    }
+
+    await setDoc(docRef, dataToSave, { merge: false });
 
     // AUTO-UPDATE PARKING LOT: Add camera and update total spaces
     try {

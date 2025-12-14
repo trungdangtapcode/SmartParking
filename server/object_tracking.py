@@ -67,7 +67,8 @@ def process_video_frame_by_frame(
     frame_skip: int = 1,
     conf_threshold: float = 0.25,
     iou_threshold: float = 0.45,
-    use_sam3: bool = False
+    use_sam3: bool = False,
+    force_mp4v: bool = False,
 ) -> Dict[str, Any]:
     """
     Process video with object tracking using YOLO + ByteTrack.
@@ -151,27 +152,26 @@ def process_video_frame_by_frame(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     # Create output video writer
-    # Use H.264 codec for better browser compatibility
+    # Default: try H.264 then fallback mp4v; if force_mp4v=True → dùng mp4v luôn
     output_path = os.path.join(tempfile.gettempdir(), f"tracked_{os.path.basename(video_path)}")
-    # Try H.264 first, fallback to mp4v
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec
-    if not os.path.exists(output_path.replace('.mp4', '_temp.mp4')):
-        # Try alternative codec if H.264 not available
+    if force_mp4v:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    else:
+        # Try H.264 first, fallback to mp4v
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec
         try:
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
             if not out.isOpened():
-                # Fallback to mp4v
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                 out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        except:
+        except Exception:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    else:
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
     frame_count = 0
-    processed_frames = 0
+    processed_frames = 0          # tổng frame đã ghi ra
+    detected_frames = 0           # số frame chạy YOLO
     all_tracks: List[Dict[str, Any]] = []
     track_history: Dict[int, List[Dict[str, Any]]] = {}  # track_id -> list of positions
     
@@ -182,75 +182,62 @@ def process_video_frame_by_frame(
         if not ret:
             break
         
-        # Skip frames if needed
-        if frame_count % frame_skip != 0:
-            frame_count += 1
-            continue
-        
-        # Run YOLO detection with tracking
-        # YOLO's track() method uses built-in ByteTrack algorithm
-        # persist=True enables tracking across frames
-        track_kwargs = {
-            "persist": True,  # Enable tracking persistence across frames (uses ByteTrack internally)
-            "conf": conf_threshold,
-            "iou": iou_threshold,
-            "verbose": False
-        }
-        
-        # Only add classes filter if not None (for COCO models)
-        if classes_filter is not None:
-            track_kwargs["classes"] = classes_filter
-        
-        results = model.track(frame, **track_kwargs)
-        
-        # Extract detections
+        do_detect = (frame_count % frame_skip == 0)
         detections = []
-        if results[0].boxes is not None:
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-            scores = results[0].boxes.conf.cpu().numpy()
-            classes = results[0].boxes.cls.cpu().numpy().astype(int)
-            track_ids = results[0].boxes.id
-            if track_ids is not None:
-                track_ids = track_ids.cpu().numpy().astype(int)
-            else:
-                track_ids = np.array([-1] * len(boxes))
-            
-            for i, (box, score, cls, tid) in enumerate(zip(boxes, scores, classes, track_ids)):
-                x1, y1, x2, y2 = map(int, box)
-                # Convert numpy types to Python native types
-                track_id = None
-                if tid is not None and tid >= 0:
-                    if isinstance(tid, (np.integer, np.int64, np.int32)):
-                        track_id = int(tid)
-                    else:
-                        track_id = int(tid)
+
+        if do_detect:
+            # Run YOLO detection with tracking
+            track_kwargs = {
+                "persist": True,  # ByteTrack inside
+                "conf": conf_threshold,
+                "iou": iou_threshold,
+                "verbose": False
+            }
+            if classes_filter is not None:
+                track_kwargs["classes"] = classes_filter
+
+            results = model.track(frame, **track_kwargs)
+
+            if results[0].boxes is not None:
+                boxes = results[0].boxes.xyxy.cpu().numpy()
+                scores = results[0].boxes.conf.cpu().numpy()
+                classes = results[0].boxes.cls.cpu().numpy().astype(int)
+                track_ids = results[0].boxes.id
+                if track_ids is not None:
+                    track_ids = track_ids.cpu().numpy().astype(int)
+                else:
+                    track_ids = np.array([-1] * len(boxes))
                 
-                detections.append({
-                    'bbox': [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],  # [x, y, w, h]
-                    'confidence': float(score),
-                    'class': int(cls),
-                    'class_name': str(model.names[int(cls)]),
-                    'track_id': track_id
-                })
-                
-                # Update track history
-                if tid >= 0:
-                    # Convert numpy int64 to Python int for dictionary key
-                    track_id_key = int(tid) if isinstance(tid, (np.integer, np.int64, np.int32)) else tid
-                    if track_id_key not in track_history:
-                        track_history[track_id_key] = []
-                    center_x = (x1 + x2) // 2
-                    center_y = (y1 + y2) // 2
-                    track_history[track_id_key].append({
-                        'frame': int(frame_count),
-                        'center': [int(center_x), int(center_y)],
-                        'bbox': [int(x1), int(y1), int(x2), int(y2)]
+                for i, (box, score, cls, tid) in enumerate(zip(boxes, scores, classes, track_ids)):
+                    x1, y1, x2, y2 = map(int, box)
+                    track_id = None
+                    if tid is not None and tid >= 0:
+                        track_id = int(tid)
+                    
+                    detections.append({
+                        'bbox': [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
+                        'confidence': float(score),
+                        'class': int(cls),
+                        'class_name': str(model.names[int(cls)]),
+                        'track_id': track_id
                     })
-        
-        # Draw annotations on frame
+                    
+                    if tid >= 0:
+                        track_id_key = int(tid)
+                        if track_id_key not in track_history:
+                            track_history[track_id_key] = []
+                        center_x = (x1 + x2) // 2
+                        center_y = (y1 + y2) // 2
+                        track_history[track_id_key].append({
+                            'frame': int(frame_count),
+                            'center': [int(center_x), int(center_y)],
+                            'bbox': [int(x1), int(y1), int(x2), int(y2)]
+                        })
+
+            detected_frames += 1
+
+        # Draw annotations (only detections available on detect frames)
         annotated_frame = frame.copy()
-        
-        # Draw bounding boxes and track IDs
         for det in detections:
             x, y, w, h = det['bbox']
             x1, y1, x2, y2 = x, y, x + w, y + h
@@ -258,17 +245,14 @@ def process_video_frame_by_frame(
             class_name = det['class_name']
             confidence = det['confidence']
             
-            # Choose color based on track ID
             color = (
                 int((track_id * 50) % 255),
                 int((track_id * 100) % 255),
                 int((track_id * 150) % 255)
             ) if track_id is not None else (0, 255, 0)
             
-            # Draw bounding box
             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
             
-            # Draw label
             label = f"ID:{track_id} {class_name}" if track_id is not None else f"{class_name}"
             label += f" {confidence:.2f}"
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
@@ -283,13 +267,11 @@ def process_video_frame_by_frame(
                 2
             )
             
-            # Draw track trail (last 10 positions)
             if track_id is not None and track_id in track_history:
-                trail = track_history[track_id][-10:]  # Last 10 positions
+                trail = track_history[track_id][-10:]
                 if len(trail) > 1:
                     points = [t['center'] for t in trail]
                     for i in range(1, len(points)):
-                        alpha = i / len(points)
                         cv2.line(
                             annotated_frame,
                             tuple(points[i-1]),
@@ -297,16 +279,16 @@ def process_video_frame_by_frame(
                             color,
                             2
                         )
-        
-        # Write frame to output video
+
         out.write(annotated_frame)
-        
-        # Store frame results (ensure all values are Python native types)
-        all_tracks.append({
-            'frame': int(frame_count),
-            'timestamp': float(frame_count / fps),
-            'detections': detections
-        })
+
+        # Lưu kết quả chỉ cho frame có detect (để tránh phình dữ liệu)
+        if do_detect:
+            all_tracks.append({
+                'frame': int(frame_count),
+                'timestamp': float(frame_count / fps),
+                'detections': detections
+            })
         
         processed_frames += 1
         frame_count += 1
