@@ -1,36 +1,37 @@
 /**
  * StreamViewerPage cho ESP32-CAM
- * Đơn giản hơn WebRTC - chỉ cần HTTP MJPEG stream
- * Hỗ trợ nhiều chế độ: ESP32, Video File, Mock FFmpeg
+ * Simple HTTP MJPEG stream viewer
+ * All streams go through backend - frontend never talks to ESP32 directly
  */
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 
-// Stream URLs
-const ESP32_DIRECT = 'http://192.168.33.122:81/stream'; // Direct từ ESP32
-const FASTAPI_PROXY_ESP32 = 'http://localhost:8000/stream'; // FastAPI proxy ESP32
-const FASTAPI_PROXY_VIDEO = 'http://localhost:8000/stream?mode=video_file'; // FastAPI video file
-const FASTAPI_PROXY_MOCK = 'http://localhost:8000/stream?mode=mock'; // FastAPI mock FFmpeg
+// Get backend URL from environment variable
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8069';
 
-type StreamMode = 'esp32' | 'direct' | 'video_file' | 'mock';
+// Stream URLs - All through backend
+const FASTAPI_PROXY_ESP32 = `${BACKEND_URL}/stream`; // Raw stream proxy
+const FASTAPI_DETECT_STREAM = `${BACKEND_URL}/stream/detect`; // With object detection
+
+type StreamMode = 'detect' | 'raw' | 'snapshot';
 
 export function StreamViewerPageESP32() {
   const { user } = useAuth();
-  const [streamMode, setStreamMode] = useState<StreamMode>('esp32');
+  const [streamMode, setStreamMode] = useState<StreamMode>('detect');
   const [error, setError] = useState<string | null>(null);
+  const [confThreshold, setConfThreshold] = useState<number>(0.25);
+  const [showLabels, setShowLabels] = useState<boolean>(true);
 
   const getStreamUrl = () => {
     switch (streamMode) {
-      case 'esp32':
+      case 'detect':
+        return `${FASTAPI_DETECT_STREAM}?conf=${confThreshold}&show_labels=${showLabels}`;
+      case 'raw':
         return FASTAPI_PROXY_ESP32;
-      case 'direct':
-        return ESP32_DIRECT;
-      case 'video_file':
-        return FASTAPI_PROXY_VIDEO;
-      case 'mock':
-        return FASTAPI_PROXY_MOCK;
+      case 'snapshot':
+        return FASTAPI_PROXY_ESP32; // Use raw stream for snapshot mode
       default:
-        return FASTAPI_PROXY_ESP32;
+        return FASTAPI_DETECT_STREAM;
     }
   };
 
@@ -40,9 +41,9 @@ export function StreamViewerPageESP32() {
     setError(`Không thể kết nối đến stream: ${streamUrl}
     
 Kiểm tra:
-1. ESP32-CAM đã bật và kết nối WiFi
-2. Có thể truy cập: ${ESP32_DIRECT} từ browser
-3. FastAPI server đang chạy (nếu dùng proxy)`);
+1. Backend server đang chạy: ${BACKEND_URL}
+2. ESP32 server đã kết nối với backend
+3. Network connection is stable`);
   };
 
   const handleImageLoad = () => {
@@ -65,75 +66,107 @@ Kiểm tra:
         {/* Stream Source Selection */}
         <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
           <h2 className="text-xl font-semibold mb-4 text-strawberry-800">
-            Chọn nguồn stream
+            Chọn chế độ xem
           </h2>
           
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {/* ESP32 via FastAPI */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {/* Object Detection Stream */}
             <button
-              onClick={() => setStreamMode('esp32')}
+              onClick={() => setStreamMode('detect')}
               className={`px-4 py-3 rounded-lg font-medium transition-all ${
-                streamMode === 'esp32'
+                streamMode === 'detect'
                   ? 'bg-strawberry-500 text-white shadow-lg ring-2 ring-strawberry-300'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              <div className="text-2xl mb-1">🔄</div>
-              <div className="text-sm">ESP32 Proxy</div>
+              <div className="text-2xl mb-1">🎯</div>
+              <div className="text-sm">Object Detection</div>
             </button>
             
-            {/* Direct ESP32 */}
+            {/* Raw Stream */}
             <button
-              onClick={() => setStreamMode('direct')}
+              onClick={() => setStreamMode('raw')}
               className={`px-4 py-3 rounded-lg font-medium transition-all ${
-                streamMode === 'direct'
-                  ? 'bg-matcha-500 text-white shadow-lg ring-2 ring-matcha-300'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              <div className="text-2xl mb-1">⚡</div>
-              <div className="text-sm">Direct ESP32</div>
-            </button>
-            
-            {/* Video File */}
-            <button
-              onClick={() => setStreamMode('video_file')}
-              className={`px-4 py-3 rounded-lg font-medium transition-all ${
-                streamMode === 'video_file'
+                streamMode === 'raw'
                   ? 'bg-blue-500 text-white shadow-lg ring-2 ring-blue-300'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
               <div className="text-2xl mb-1">📹</div>
-              <div className="text-sm">Video File</div>
+              <div className="text-sm">Raw Stream</div>
             </button>
             
-            {/* Mock FFmpeg */}
+            {/* Snapshot Mode */}
             <button
-              onClick={() => setStreamMode('mock')}
+              onClick={() => setStreamMode('snapshot')}
               className={`px-4 py-3 rounded-lg font-medium transition-all ${
-                streamMode === 'mock'
-                  ? 'bg-purple-500 text-white shadow-lg ring-2 ring-purple-300'
+                streamMode === 'snapshot'
+                  ? 'bg-matcha-500 text-white shadow-lg ring-2 ring-matcha-300'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              <div className="text-2xl mb-1">🎬</div>
-              <div className="text-sm">Mock FFmpeg</div>
+              <div className="text-2xl mb-1">📸</div>
+              <div className="text-sm">Snapshot Mode</div>
             </button>
           </div>
 
           <div className="mt-4 p-3 bg-gray-50 rounded-lg">
             <p className="text-sm text-gray-600 mb-2">
               <strong>Chế độ hiện tại:</strong>{' '}
-              {streamMode === 'esp32' && '🔄 ESP32-CAM qua FastAPI Proxy (Production)'}
-              {streamMode === 'direct' && '⚡ Trực tiếp từ ESP32-CAM'}
-              {streamMode === 'video_file' && '📹 Video File (Testing - cần file test_video.mp4)'}
-              {streamMode === 'mock' && '🎬 Mock FFmpeg Stream (Testing - cần chạy script)'}
+              {streamMode === 'detect' && '🎯 Object Detection + Tracking (YOLO)'}
+              {streamMode === 'raw' && '📹 Raw Stream (via backend proxy)'}
+              {streamMode === 'snapshot' && '📸 Snapshot Mode (capture frames)'}
             </p>
             <p className="text-xs text-gray-500 font-mono">
               URL: {streamUrl}
             </p>
+            <p className="text-xs text-gray-500 mt-1">
+              ℹ️ All streams go through backend (port {BACKEND_URL})
+            </p>
           </div>
+
+          {/* Detection Settings (show only when detect mode) */}
+          {streamMode === 'detect' && (
+            <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <h3 className="font-semibold text-blue-800 mb-3">⚙️ Detection Settings</h3>
+              
+              <div className="space-y-3">
+                {/* Confidence Threshold */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Confidence Threshold: {confThreshold.toFixed(2)}
+                  </label>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.9"
+                    step="0.05"
+                    value={confThreshold}
+                    onChange={(e) => setConfThreshold(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>More detections (0.1)</span>
+                    <span>More accurate (0.9)</span>
+                  </div>
+                </div>
+
+                {/* Show Labels Toggle */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="showLabels"
+                    checked={showLabels}
+                    onChange={(e) => setShowLabels(e.target.checked)}
+                    className="w-4 h-4 text-strawberry-500 rounded"
+                  />
+                  <label htmlFor="showLabels" className="text-sm font-medium text-gray-700">
+                    Show detection labels
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Stream Display */}
@@ -159,10 +192,9 @@ Kiểm tra:
             {/* Overlay: Stream Info */}
             <div className="absolute top-4 right-4 bg-black/70 text-white px-4 py-2 rounded-lg backdrop-blur-sm">
               <p className="text-sm">
-                {streamMode === 'esp32' && '🔄 ESP32 Proxy'}
-                {streamMode === 'direct' && '⚡ ESP32 Direct'}
-                {streamMode === 'video_file' && '📹 Video File'}
-                {streamMode === 'mock' && '🎬 Mock FFmpeg'}
+                {streamMode === 'detect' && '🎯 YOLO Detection'}
+                {streamMode === 'raw' && '📹 Raw Stream'}
+                {streamMode === 'snapshot' && '📸 Snapshot'}
               </p>
             </div>
           </div>
@@ -186,10 +218,12 @@ Kiểm tra:
             <div className="bg-gray-50 rounded-lg p-4">
               <h3 className="font-semibold text-gray-800 mb-2">📡 Thông tin kết nối</h3>
               <ul className="text-sm text-gray-600 space-y-1">
-                <li>• <strong>ESP32 IP:</strong> 192.168.1.158</li>
-                <li>• <strong>Port:</strong> 81</li>
+                <li>• <strong>Backend API:</strong> {BACKEND_URL}</li>
                 <li>• <strong>Protocol:</strong> MJPEG over HTTP</li>
-                <li>• <strong>FastAPI:</strong> localhost:8000</li>
+                <li>• <strong>Detection:</strong> YOLOv8 (real-time)</li>
+                <li className="text-xs text-gray-500 mt-2">
+                  ℹ️ Frontend → Backend → ESP32 (indirect connection)
+                </li>
               </ul>
             </div>
 
@@ -204,12 +238,12 @@ Kiểm tra:
                   🔄 Reload Stream
                 </button>
                 <a
-                  href={ESP32_DIRECT}
+                  href={`${BACKEND_URL}/docs`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="block w-full px-4 py-2 bg-matcha-500 text-white rounded-lg hover:bg-matcha-600 transition text-center"
                 >
-                  🔗 Mở trực tiếp ESP32
+                  � API Documentation
                 </a>
               </div>
             </div>
@@ -223,17 +257,17 @@ Kiểm tra:
             <div className="mt-4 bg-gray-50 rounded-lg p-4 text-sm text-gray-700 space-y-2">
               <p><strong>Nếu không thấy stream:</strong></p>
               <ol className="list-decimal list-inside space-y-1 ml-2">
-                <li>Kiểm tra ESP32-CAM đã bật và kết nối WiFi</li>
-                <li>Test trực tiếp: <a href={ESP32_DIRECT} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{ESP32_DIRECT}</a></li>
-                <li>Đảm bảo FastAPI server đang chạy: <code className="bg-gray-200 px-2 py-0.5 rounded">python main_fastapi.py</code></li>
-                <li>Kiểm tra network: ESP32 và máy phải cùng mạng WiFi</li>
-                <li>Check firewall không block port 81</li>
+                <li>Đảm bảo backend đang chạy: <code className="bg-gray-200 px-2 py-0.5 rounded">cd server && python main_fastapi.py</code></li>
+                <li>Kiểm tra ESP32-CAM đang streaming: <code className="bg-gray-200 px-2 py-0.5 rounded">cd ESP32 && python start_mock.py --port 5069</code></li>
+                <li>Test backend health: <a href={`${BACKEND_URL}/health`} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{BACKEND_URL}/health</a></li>
+                <li>Test backend stream: <code className="bg-gray-200 px-2 py-0.5 rounded">curl {BACKEND_URL}/stream | head -c 1000</code></li>
               </ol>
               
-              <p className="mt-4"><strong>Test FastAPI server:</strong></p>
+              <p className="mt-4"><strong>Để bật Object Detection:</strong></p>
               <ul className="list-disc list-inside ml-2">
-                <li>Health check: <a href="http://localhost:8000/health" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">http://localhost:8000/health</a></li>
-                <li>Test ESP32: <a href="http://localhost:8000/test/esp32" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">http://localhost:8000/test/esp32</a></li>
+                <li>Chọn chế độ "Object Detection" ở trên</li>
+                <li>Điều chỉnh Confidence Threshold để thay đổi độ nhạy</li>
+                <li>Stream sẽ hiển thị bounding boxes và labels cho các objects được phát hiện</li>
               </ul>
             </div>
           </details>

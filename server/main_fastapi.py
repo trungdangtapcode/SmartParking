@@ -1,38 +1,48 @@
 """
-FastAPI Backend cho SmartParking với ESP32-CAM
-Thay thế Node.js signaling.js
+FastAPI Backend cho SmartParking
+Main API server for AI detection and Firebase integration
+Streaming is handled by separate ESP32 folder
 """
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import uvicorn
 import aiohttp
-import asyncio
-import cv2
 import os
+import sys
+import cv2
+import numpy as np
 from pathlib import Path
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Add ESP32 folder to path
+ESP32_PATH = Path(__file__).parent.parent / "ESP32"
+sys.path.insert(0, str(ESP32_PATH))
 
 # Import services
 from services.ai_service import AIService
 from services.firebase_service import FirebaseService
+from esp32_client import ESP32Client
 
 # Global instances
 ai_service = None
 firebase_service = None
+esp32_client = None
 
 # ========== CONFIGURATION ==========
-ESP32_STREAM_URL = "http://192.168.33.122:81/stream"  # ESP32-CAM IP
-MOCK_STREAM_URL = "http://localhost:8081/stream"      # FFmpeg mock stream
-TEST_VIDEO_PATH = Path(__file__).parent / "test_video.mp4"  # Video file for testing
-
-# Stream mode: "esp32" or "video_file" or "mock"
-STREAM_MODE = os.getenv("STREAM_MODE", "esp32")  # Default: ESP32
+# ESP32-CAM Configuration
+# Development: http://localhost:5069 (video file streaming for development)
+# Production: http://192.168.33.122:81 (ESP32-CAM hardware)
+ESP32_URL = os.getenv("ESP32_URL", "http://localhost:5069")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager - load models khi start server"""
-    global ai_service, firebase_service
+    global ai_service, firebase_service, esp32_client
     
     print("🚀 Starting FastAPI SmartParking Server...")
     
@@ -44,8 +54,26 @@ async def lifespan(app: FastAPI):
     
     # Initialize Firebase
     print("🔥 Initializing Firebase Admin SDK...")
-    firebase_service = FirebaseService()
-    print("✅ Firebase initialized")
+    try:
+        firebase_service = FirebaseService()
+        print("✅ Firebase initialized")
+    except Exception as e:
+        print(f"⚠️  Firebase initialization failed: {e}")
+        print("⚠️  Continuing without Firebase (some features will be disabled)")
+        firebase_service = None
+    
+    # Initialize ESP32 client
+    print(f"📹 Connecting to ESP32: {ESP32_URL}")
+    esp32_client = ESP32Client(ESP32_URL)
+    
+    # Test connection
+    async with ESP32Client(ESP32_URL) as test_client:
+        result = await test_client.test_connection()
+        if result['connected']:
+            print(f"✅ ESP32 connected: {ESP32_URL}")
+        else:
+            print(f"⚠️  ESP32 not connected: {result.get('error', 'Unknown error')}")
+            print(f"   💡 Start ESP32 server: cd ESP32 && python start_mock.py --port 5069")
     
     yield  # Server chạy ở đây
     
@@ -65,8 +93,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",  # Frontend React
-        "http://192.168.1.*",     # LAN devices
+        "http://localhost:5169",  # Frontend React (custom port)
+        "http://localhost:5173",  # Frontend React (default)
+        "http://127.0.0.1:5169",
+        "http://127.0.0.1:5173",
+        "*"  # Allow all for development
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -79,54 +110,38 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "ok",
-        "service": "fastapi+esp32+ai+firebase",
+        "service": "smartparking-api",
         "models_loaded": ai_service is not None,
         "firebase_connected": firebase_service is not None,
+        "esp32_url": ESP32_URL
     }
 
-# ========== STREAM PROXY (ESP32 / VIDEO FILE / MOCK) ==========
+# ========== ESP32 STREAM PROXY ==========
 @app.get("/stream")
-async def stream_video(
-    mode: str = Query(default=None, description="Stream mode: esp32, video_file, mock"),
-    file: str = Query(default=None, description="Video filename (for mode=video_file)")
-):
+async def proxy_esp32_stream():
     """
-    Stream video từ nhiều nguồn:
-    - ESP32-CAM (default)
-    - Video file (for testing) - supports multiple files from stream/ folder
-    - Mock FFmpeg stream (for testing)
+    Proxy ESP32-CAM stream (delegates to mock_esp32_server.py or real ESP32)
     
     Usage:
-    - <img src="http://localhost:8000/stream" />  (ESP32)
-    - <img src="http://localhost:8000/stream?mode=video_file&file=parking_a.mp4" />  (Video file)
-    - <img src="http://localhost:8000/stream?mode=mock" />  (FFmpeg mock)
+    - <img src="http://localhost:8069/stream" />
     """
-    # Determine stream mode
-    stream_mode = mode or STREAM_MODE
+    stream_url = f"{ESP32_URL}/stream"
     
-    if stream_mode == "video_file":
-        return await stream_from_video_file(video_filename=file)
-    elif stream_mode == "mock":
-        return await stream_from_mock()
-    else:  # Default: esp32
-        return await stream_from_esp32()
-
-async def stream_from_esp32():
-    """
-    Proxy MJPEG stream từ ESP32-CAM
-    """
-    async def generate_stream():
+    async def generate_proxy_stream():
         try:
             timeout = aiohttp.ClientTimeout(total=None, sock_read=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(ESP32_STREAM_URL) as response:
+                async with session.get(stream_url) as response:
                     if response.status != 200:
                         raise HTTPException(
                             status_code=502,
-                            detail=f"ESP32 stream unavailable (status: {response.status})"
+                            detail=f"ESP32 stream unavailable (status: {response.status}). "
+                                   f"Ensure ESP32 server is running and accessible."
                         )
                     
-                    # Stream từng chunk từ ESP32 đến client
+                    print(f"📹 Proxying stream from: {stream_url}")
+                    
+                    # Proxy stream chunks
                     async for chunk in response.content.iter_chunked(1024):
                         yield chunk
                         
@@ -134,14 +149,15 @@ async def stream_from_esp32():
             print(f"❌ Error connecting to ESP32: {e}")
             raise HTTPException(
                 status_code=502,
-                detail=f"Cannot connect to ESP32 at {ESP32_STREAM_URL}"
+                detail=f"Cannot connect to ESP32 at {stream_url}. "
+                       f"Ensure ESP32 server is running."
             )
         except Exception as e:
-            print(f"❌ Stream error: {e}")
+            print(f"❌ Stream proxy error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
     return StreamingResponse(
-        generate_stream(),
+        generate_proxy_stream(),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -150,126 +166,113 @@ async def stream_from_esp32():
         }
     )
 
-async def stream_from_video_file(video_filename: str = None):
+# ========== STREAM WITH OBJECT DETECTION ==========
+@app.get("/stream/detect")
+async def stream_with_detection(
+    conf: float = Query(0.25, description="Confidence threshold"),
+    show_labels: bool = Query(True, description="Show detection labels")
+):
     """
-    Stream MJPEG từ video file (for testing)
-    Đọc video file và stream như ESP32-CAM
+    Stream ESP32 với real-time object detection
     
-    Args:
-        video_filename: Tên file video (optional). Nếu không có, dùng test_video.mp4
-                       Sẽ tìm trong thư mục stream/ trước, nếu không có thì tìm ở root
+    Usage:
+    - <img src="http://localhost:8069/stream/detect" />
+    - <img src="http://localhost:8069/stream/detect?conf=0.5&show_labels=true" />
     """
-    # Determine video path
-    if video_filename:
-        # Tìm trong thư mục stream/ trước
-        stream_folder = Path(__file__).parent / "stream"
-        video_path = stream_folder / video_filename
-        
-        # Nếu không có trong stream/, thử tìm ở root
-        if not video_path.exists():
-            video_path = Path(__file__).parent / video_filename
-        
-        if not video_path.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"Video file not found: {video_filename}. Please add to server/stream/ folder."
-            )
-    else:
-        # Default: test_video.mp4 ở root
-        video_path = TEST_VIDEO_PATH
-        if not video_path.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"Video file not found: {TEST_VIDEO_PATH}. Please add test_video.mp4 to server folder."
-            )
+    stream_url = f"{ESP32_URL}/stream"
     
-    async def generate_video_stream():
-        try:
-            cap = cv2.VideoCapture(str(video_path))
-            
-            if not cap.isOpened():
-                raise HTTPException(status_code=500, detail=f"Cannot open video file: {video_path.name}")
-            
-            # Get FPS để stream đúng tốc độ
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30
-            delay = 1.0 / fps
-            
-            print(f"📹 Streaming from video file: {video_path.name} ({fps} FPS)")
-            
-            while True:
-                ret, frame = cap.read()
-                
-                # Loop video
-                if not ret:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
-                
-                # Resize để giống ESP32-CAM (640x480)
-                frame = cv2.resize(frame, (640, 480))
-                
-                # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if not ret:
-                    continue
-                
-                # MJPEG format
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                
-                # Delay để stream đúng FPS
-                await asyncio.sleep(delay)
-                
-        except Exception as e:
-            print(f"❌ Video stream error: {e}")
-            raise
-        finally:
-            if 'cap' in locals():
-                cap.release()
-    
-    return StreamingResponse(
-        generate_video_stream(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        }
-    )
-
-async def stream_from_mock():
-    """
-    Proxy stream từ FFmpeg mock server (localhost:8081)
-    Giống stream_from_esp32 nhưng từ mock server
-    """
-    async def generate_stream():
+    async def generate_detected_stream():
         try:
             timeout = aiohttp.ClientTimeout(total=None, sock_read=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(MOCK_STREAM_URL) as response:
+                async with session.get(stream_url) as response:
                     if response.status != 200:
                         raise HTTPException(
                             status_code=502,
-                            detail=f"Mock stream unavailable (status: {response.status}). Start mock: server/stream_video_mock.bat"
+                            detail=f"ESP32 stream unavailable (status: {response.status})"
                         )
                     
-                    print(f"📹 Streaming from mock FFmpeg server: {MOCK_STREAM_URL}")
+                    print(f"📹 Streaming with detection from: {stream_url} (conf={conf})")
                     
-                    # Stream từng chunk từ mock đến client
+                    buffer = b""
+                    frame_count = 0
+                    
+                    # Read MJPEG stream
                     async for chunk in response.content.iter_chunked(1024):
-                        yield chunk
+                        buffer += chunk
+                        
+                        # Find JPEG boundaries
+                        while True:
+                            start = buffer.find(b'\xff\xd8')  # JPEG start
+                            end = buffer.find(b'\xff\xd9')    # JPEG end
+                            
+                            if start != -1 and end != -1 and end > start:
+                                # Extract frame
+                                jpeg_data = buffer[start:end+2]
+                                buffer = buffer[end+2:]
+                                
+                                # Decode frame
+                                nparr = np.frombuffer(jpeg_data, np.uint8)
+                                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                                
+                                if frame is not None:
+                                    # Run YOLO detection on GPU
+                                    results = ai_service.yolo_model(
+                                        frame,
+                                        conf=conf,
+                                        device=ai_service.device,  # Use detected device (cuda/mps/cpu)
+                                        verbose=False
+                                    )[0]
+                                    
+                                    # Draw detections
+                                    annotated_frame = frame.copy()
+                                    
+                                    for box in results.boxes:
+                                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                                        confidence = float(box.conf[0])
+                                        class_id = int(box.cls[0])
+                                        class_name = results.names[class_id]
+                                        
+                                        # Draw box
+                                        color = (0, 255, 0)  # Green
+                                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+                                        
+                                        # Draw label
+                                        if show_labels:
+                                            label = f"{class_name} {confidence:.2f}"
+                                            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                                            cv2.rectangle(annotated_frame, (x1, y1-th-8), (x1+tw+6, y1), color, -1)
+                                            cv2.putText(
+                                                annotated_frame, label, (x1+3, y1-5),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
+                                            )
+                                    
+                                    # Encode back to JPEG
+                                    _, jpeg_encoded = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                                    
+                                    # Yield as MJPEG frame
+                                    yield (b'--frame\r\n'
+                                           b'Content-Type: image/jpeg\r\n\r\n' +
+                                           jpeg_encoded.tobytes() + b'\r\n')
+                                    
+                                    frame_count += 1
+                                    if frame_count % 30 == 0:
+                                        print(f"📹 Processed {frame_count} frames with detection")
+                            else:
+                                break
                         
         except aiohttp.ClientError as e:
-            print(f"❌ Error connecting to mock stream: {e}")
+            print(f"❌ Error connecting to ESP32: {e}")
             raise HTTPException(
                 status_code=502,
-                detail=f"Cannot connect to mock stream at {MOCK_STREAM_URL}. Start mock: server/stream_video_mock.bat"
+                detail=f"Cannot connect to ESP32 at {stream_url}"
             )
         except Exception as e:
-            print(f"❌ Mock stream error: {e}")
+            print(f"❌ Detection stream error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
     return StreamingResponse(
-        generate_stream(),
+        generate_detected_stream(),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -277,6 +280,39 @@ async def stream_from_mock():
             "Expires": "0",
         }
     )
+
+# ========== ESP32 SNAPSHOT ==========
+@app.get("/api/esp32/snapshot")
+async def get_esp32_snapshot():
+    """
+    Capture single frame from ESP32-CAM
+    """
+    try:
+        async with esp32_client as client:
+            frame_bytes = await client.capture_frame()
+            
+            # Convert to base64
+            import base64
+            image_b64 = base64.b64encode(frame_bytes).decode('utf-8')
+            
+            return {
+                "success": True,
+                "imageData": f"data:image/jpeg;base64,{image_b64}"
+            }
+            
+    except Exception as e:
+        print(f"❌ Snapshot error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/esp32/status")
+async def get_esp32_status():
+    """Get ESP32-CAM status"""
+    try:
+        async with esp32_client as client:
+            status = await client.get_status()
+            return {"success": True, **status}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # ========== AI DETECTION APIs ==========
 @app.post("/api/plate-detect")
@@ -373,77 +409,6 @@ async def get_esp32_snapshot():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========== STREAM SNAPSHOT ==========
-@app.get("/api/stream/snapshot")
-async def get_stream_snapshot(
-    mode: str = Query(default="video_file", description="Stream mode: video_file"),
-    file: str = Query(default=None, description="Video filename")
-):
-    """
-    Lấy 1 frame snapshot từ video file stream để OCR/processing
-    """
-    try:
-        import base64
-        
-        if mode != "video_file" or not file:
-            raise HTTPException(status_code=400, detail="Only video_file mode with file parameter is supported")
-        
-        # Find video file
-        stream_folder = Path(__file__).parent / "stream"
-        video_path = stream_folder / file
-        
-        if not video_path.exists():
-            video_path = Path(__file__).parent / file
-        
-        if not video_path.exists():
-            raise HTTPException(status_code=404, detail=f"Video file not found: {file}")
-        
-        # Read frame from video
-        # Note: This opens a NEW VideoCapture, so it returns frame at current position
-        # For best results, capture from <img> element in frontend (canvas)
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise HTTPException(status_code=500, detail=f"Cannot open video: {file}")
-        
-        # Try to get a frame from middle of video (not first frame)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames > 100:
-            # Set position to middle of video
-            cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames // 2)
-        
-        ret, frame = cap.read()
-        
-        # If failed, try reading from beginning
-        if not ret or frame is None:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret, frame = cap.read()
-        
-        cap.release()
-        
-        if not ret or frame is None:
-            raise HTTPException(status_code=500, detail="Failed to read frame from video")
-        
-        # Resize if needed
-        frame = cv2.resize(frame, (640, 480))
-        
-        # Encode as JPEG
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not ret:
-            raise HTTPException(status_code=500, detail="Failed to encode frame")
-        
-        # Convert to base64
-        image_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
-        
-        return {
-            "success": True,
-            "imageData": f"data:image/jpeg;base64,{image_b64}"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ Stream snapshot error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ========== FIREBASE APIs ==========
 @app.get("/api/firebase/detections")
 async def get_detections(limit: int = 50):
@@ -468,36 +433,30 @@ async def get_plate_history(limit: int = 50):
 async def test_esp32_connection():
     """Test kết nối với ESP32-CAM"""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(ESP32_STREAM_URL, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                status = response.status
-                return {
-                    "esp32_url": ESP32_STREAM_URL,
-                    "status_code": status,
-                    "connected": status == 200,
-                    "message": "ESP32 OK" if status == 200 else "ESP32 unavailable"
-                }
+        async with esp32_client as client:
+            result = await client.test_connection()
+            return result
     except Exception as e:
         return {
-            "esp32_url": ESP32_STREAM_URL,
             "connected": False,
             "error": str(e),
-            "message": "Cannot connect to ESP32. Check IP address and network."
+            "message": "Cannot connect to ESP32. Check configuration and network."
         }
 
 if __name__ == "__main__":
     print("=" * 60)
     print("🚀 SmartParking FastAPI Server")
     print("=" * 60)
-    print(f"📹 ESP32-CAM: {ESP32_STREAM_URL}")
-    print(f"🌐 Server will start at: http://localhost:8000")
-    print(f"📖 API Docs: http://localhost:8000/docs")
+    print(f"📹 ESP32-CAM: {ESP32_URL}")
+    print(f"🌐 Backend Server: http://localhost:8069")
+    print(f"📖 API Docs: http://localhost:8069/docs")
+    print(f"💡 Start ESP32 server: cd ESP32 && python start_mock.py --port 5069")
     print("=" * 60)
     
     uvicorn.run(
         "main_fastapi:app",
         host="0.0.0.0",
-        port=8000,
+        port=8069,
         reload=True,  # Auto-reload khi code thay đổi
         log_level="info"
     )

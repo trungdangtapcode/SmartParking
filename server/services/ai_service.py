@@ -1,12 +1,14 @@
 """
 AI Service - YOLO Object Tracking + License Plate Recognition
 Tích hợp trực tiếp, KHÔNG spawn subprocess
+Supports CUDA GPU acceleration
 """
 import base64
 import tempfile
 import os
 import cv2
 import numpy as np
+import torch
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -21,22 +23,41 @@ except ImportError as e:
 
 
 class AIService:
-    """AI Service quản lý YOLO và ALPR models"""
+    """AI Service quản lý YOLO và ALPR models với CUDA support"""
     
     def __init__(self):
         self.yolo_model = None
         self.alpr_model = None
         self.models_loaded = False
+        self.device = None
         
         # Paths
         self.script_dir = Path(__file__).parent.parent
         self.custom_model_path = self.script_dir / "yolov8s_car_custom.pt"
         self.default_model_path = self.script_dir / "yolov8n.pt"
     
+    def _get_device(self):
+        """Detect and return best available device (CUDA, MPS, or CPU)"""
+        if torch.cuda.is_available():
+            device = 'cuda'
+            gpu_name = torch.cuda.get_device_name(0)
+            print(f"🚀 CUDA available: {gpu_name}")
+            print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+            print(f"🚀 MPS (Apple Silicon) available")
+        else:
+            device = 'cpu'
+            print(f"⚠️  No GPU detected, using CPU (slower)")
+        return device
+    
     async def load_models(self):
-        """Load YOLO và ALPR models 1 lần duy nhất"""
+        """Load YOLO và ALPR models 1 lần duy nhất với CUDA support"""
         if self.models_loaded:
             return
+        
+        # Detect device
+        self.device = self._get_device()
         
         # Load YOLO model
         try:
@@ -52,7 +73,13 @@ class AIService:
                 print(f"ℹ️  Downloading YOLO model: {model_path}")
             
             self.yolo_model = YOLO(model_path)
-            print(f"✅ YOLO model loaded successfully")
+            
+            # Move model to GPU if available
+            if self.device != 'cpu':
+                self.yolo_model.to(self.device)
+                print(f"✅ YOLO model loaded on {self.device.upper()}")
+            else:
+                print(f"✅ YOLO model loaded on CPU")
             
         except Exception as e:
             print(f"❌ Failed to load YOLO model: {e}")

@@ -1,10 +1,12 @@
-// API Configuration
+// API Configuration - Using environment variables
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8069';
+
 export const API_CONFIG = {
     // FastAPI backend
-    baseURL: 'http://localhost:8000',
+    baseURL: BACKEND_URL,
     
-    // ESP32 stream endpoint (qua FastAPI proxy)
-    streamURL: 'http://localhost:8000/stream',
+    // ESP32 stream endpoint (via FastAPI proxy)
+    streamURL: `${BACKEND_URL}/stream`,
     
     // API endpoints
     endpoints: {
