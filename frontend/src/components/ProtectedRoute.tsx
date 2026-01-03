@@ -26,7 +26,8 @@ export function ProtectedRoute({ children, roles }: ProtectedRouteProps) {
   if (roles && role && !roles.includes(role)) {
     return (
       <div className="p-8 text-center text-red-600">
-        Bạn không có quyền truy cập trang này.
+        Bạn không có quyền truy cập trang này. Chi tiết:
+        roles-{role}, required-{roles.join(', ')}, user-{user.email}
       </div>
     );
   }

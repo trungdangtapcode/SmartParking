@@ -1,6 +1,17 @@
 """
 Mock ESP32-CAM Streaming Server
 Simulates ESP32-CAM behavior for development/testing
+
+Features:
+- MJPEG streaming (/stream)
+- Single frame capture (/capture)
+- Video looping (simulates continuous camera feed)
+- Frame index overlay for debugging (set SHOW_FRAME_ID constant)
+
+Debug Mode:
+- Set SHOW_FRAME_ID = True to show frame numbers on video
+- Helps verify stream synchronization and frame skipping
+- Green overlay shows "Frame: X" on each frame
 """
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,9 +46,16 @@ DEFAULT_VIDEO = os.environ.get("MOCK_DEFAULT_VIDEO", "test_video.mp4")
 DEFAULT_FPS = 30
 DEFAULT_RESOLUTION = (640, 480)  # ESP32-CAM typical resolution
 
+# 🔍 DEBUG: Show frame index overlay on video
+SHOW_FRAME_ID = True  # Set to False to disable frame index overlay
+
 # Global video capture (to simulate persistent camera)
 current_video_path: Optional[Path] = None
 video_capture: Optional[cv2.VideoCapture] = None
+
+# 🔥 GLOBAL FRAME COUNTER (shared across all connections)
+global_frame_idx = 0
+frame_lock = asyncio.Lock()  # Thread-safe counter
 
 def get_or_create_capture(video_filename: str = None) -> cv2.VideoCapture:
     """Get or create video capture (simulates ESP32 camera)"""
@@ -94,12 +112,15 @@ async def stream_video(
 ):
     """
     MJPEG stream endpoint - mimics ESP32-CAM /stream
+    🔥 BROADCAST MODE: All clients see the SAME frame ID (global counter)
     
     Usage:
     - http://localhost:8081/stream (default video)
     - http://localhost:8081/stream?video=parking_a.mp4
     - http://localhost:8081/stream?video=parking_a.mp4&fps=20
     """
+    global global_frame_idx
+    
     # Parse resolution
     try:
         width, height = map(int, resolution.split('x'))
@@ -109,11 +130,15 @@ async def stream_video(
     
     async def generate_mjpeg_stream():
         """Generate MJPEG stream like ESP32-CAM"""
+        global global_frame_idx
+        
         try:
             cap = get_or_create_capture(video)
             delay = 1.0 / fps
             
-            print(f"📹 [Mock ESP32] Streaming: {current_video_path.name} @ {fps}fps")
+            print(f"📹 [Mock ESP32] Streaming: {current_video_path.name} @ {fps}fps (Global Frame: {global_frame_idx})")
+            if SHOW_FRAME_ID:
+                print(f"🔍 [Mock ESP32] Frame ID overlay: ENABLED (GLOBAL MODE)")
             
             while True:
                 ret, frame = cap.read()
@@ -121,10 +146,32 @@ async def stream_video(
                 # Loop video when it ends
                 if not ret:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    # 🔥 DON'T reset global counter - it keeps incrementing!
                     continue
+                
+                # 🔥 Increment GLOBAL frame counter (shared across all connections)
+                async with frame_lock:
+                    global_frame_idx += 1
+                    current_frame_idx = global_frame_idx
                 
                 # Resize to target resolution
                 frame = cv2.resize(frame, target_resolution)
+                
+                # � DEBUG: Add GLOBAL frame index overlay
+                if SHOW_FRAME_ID:
+                    # Add semi-transparent background for better readability
+                    overlay = frame.copy()
+                    cv2.rectangle(overlay, (5, 5), (200, 50), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+                    
+                    # Add GLOBAL frame index text
+                    cv2.putText(frame, f"Frame: {current_frame_idx}", 
+                                (10, 35), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 
+                                0.8, 
+                                (0, 255, 0),  # Green color
+                                2, 
+                                cv2.LINE_AA)
                 
                 # Encode as JPEG (simulate ESP32-CAM compression)
                 ret, buffer = cv2.imencode('.jpg', frame, [
@@ -159,16 +206,21 @@ async def stream_video(
 @app.get("/capture")
 async def capture_frame(
     video: str = Query(default=None, description="Video filename"),
-    quality: int = Query(default=85, ge=1, le=100, description="JPEG quality")
+    quality: int = Query(default=85, ge=1, le=100, description="JPEG quality"),
+    show_frame_id: bool = Query(default=SHOW_FRAME_ID, description="Show frame index overlay")
 ):
     """
     Capture single frame - mimics ESP32-CAM /capture
+    🔥 Shows GLOBAL frame ID (same as streaming)
     Returns a JPEG image
     
     Usage:
     - http://localhost:8081/capture
     - http://localhost:8081/capture?video=parking_a.mp4&quality=90
+    - http://localhost:8081/capture?show_frame_id=false
     """
+    global global_frame_idx
+    
     try:
         cap = get_or_create_capture(video)
         
@@ -183,6 +235,22 @@ async def capture_frame(
         
         # Resize to ESP32-CAM resolution
         frame = cv2.resize(frame, DEFAULT_RESOLUTION)
+        
+        # 🔍 DEBUG: Add GLOBAL frame index overlay
+        if show_frame_id:
+            # Add semi-transparent background
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (5, 5), (200, 50), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+            
+            # Add GLOBAL frame index text
+            cv2.putText(frame, f"Frame: {global_frame_idx}", 
+                        (10, 35), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.8, 
+                        (0, 255, 0),
+                        2, 
+                        cv2.LINE_AA)
         
         # Encode as JPEG
         ret, buffer = cv2.imencode('.jpg', frame, [
@@ -210,7 +278,7 @@ async def capture_frame(
 @app.get("/status")
 async def get_status():
     """Get camera status - mimics ESP32-CAM /status"""
-    global video_capture, current_video_path
+    global video_capture, current_video_path, global_frame_idx
     
     is_streaming = video_capture is not None and video_capture.isOpened()
     
@@ -219,7 +287,9 @@ async def get_status():
         "status": "streaming" if is_streaming else "idle",
         "current_video": current_video_path.name if current_video_path else None,
         "resolution": f"{DEFAULT_RESOLUTION[0]}x{DEFAULT_RESOLUTION[1]}",
-        "available_videos": [f.name for f in STREAM_FOLDER.glob("*.mp4")] if STREAM_FOLDER.exists() else []
+        "available_videos": [f.name for f in STREAM_FOLDER.glob("*.mp4")] if STREAM_FOLDER.exists() else [],
+        "global_frame_id": global_frame_idx,  # 🔥 NEW: Show current global frame
+        "broadcast_mode": True  # 🔥 NEW: Indicate broadcast mode is active
     }
 
 @app.post("/control")
@@ -232,7 +302,10 @@ async def control_camera(command: dict):
     - {"action": "stop_stream"}
     - {"action": "set_quality", "quality": 90}
     - {"action": "set_resolution", "resolution": "800x600"}
+    - {"action": "reset_frame_counter"}  # 🔥 NEW: Reset global frame counter
     """
+    global global_frame_idx
+    
     action = command.get("action")
     
     if action == "start_stream":
@@ -259,6 +332,18 @@ async def control_camera(command: dict):
         # Template for real ESP32 resolution control
         resolution = command.get("resolution", "640x480")
         return {"success": True, "message": f"Resolution set to {resolution}"}
+    
+    elif action == "reset_frame_counter":
+        # 🔥 NEW: Reset global frame counter
+        old_count = global_frame_idx
+        async with frame_lock:
+            global_frame_idx = 0
+        return {
+            "success": True, 
+            "message": f"Frame counter reset from {old_count} to 0",
+            "old_value": old_count,
+            "new_value": 0
+        }
     
     else:
         raise HTTPException(400, f"Unknown action: {action}")

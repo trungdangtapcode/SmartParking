@@ -21,10 +21,11 @@ sys.path.insert(0, str(ESP32_PATH))
 # Import services
 from services.ai_service import AIService
 from services.firebase_service import FirebaseService
+from services.stream_broadcaster import broadcast_manager
 from esp32_client import ESP32Client
 
 # Import routers
-from routers import health, user_config, streams, esp32, ai_detection, firebase
+from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams
 
 # Global instances
 ai_service = None
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
     health.init_router(ai_service, firebase_service, ESP32_URL)
     user_config.init_router(firebase_service)
     streams.init_router(ai_service, firebase_service, ESP32_URL)
+    websocket_streams.init_router(ai_service, firebase_service, ESP32_URL)
     esp32.init_router(esp32_client)
     ai_detection.init_router(ai_service, firebase_service)
     firebase.init_router(firebase_service)
@@ -82,6 +84,11 @@ async def lifespan(app: FastAPI):
     
     # Cleanup on shutdown
     print("🛑 Shutting down server...")
+    
+    # Stop all broadcasters
+    print("📡 Stopping broadcasters...")
+    await broadcast_manager.cleanup_all()
+    
     if ai_service:
         ai_service.cleanup()
 
@@ -112,6 +119,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(user_config.router)
 app.include_router(streams.router)
+app.include_router(websocket_streams.router)
 app.include_router(esp32.router)
 app.include_router(ai_detection.router)
 app.include_router(firebase.router)

@@ -40,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
       if (userDoc.exists()) {
         const data = userDoc.data() as UserProfile;
+        console.log('Loaded user role:', data.role);
         // Admin chỉ được kích hoạt khi email đã verified
         if (data.role === 'admin') {
           setRole(firebaseUser.emailVerified ? 'admin' : 'driver');

@@ -2,6 +2,13 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { performVehicleCheckIn } from '../services/checkInService';
 import { getParkingLotsByOwner } from '../services/parkingLotService';
+import { 
+  getUserESP32Configs, 
+  saveESP32Config, 
+  deleteESP32Config, 
+  setDefaultESP32,
+  type ESP32Config 
+} from '../services/esp32ConfigService';
 import type { ParkingLot } from '../types/parkingLot.types';
 
 // ============================================
@@ -13,9 +20,6 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8069';
 
 // ESP32-CAM IP Addresses (Predefined options)
 const ESP32_CAMERAS = [
-  { id: 'esp32_1', name: 'ESP32-CAM 1', ip: 'http://192.168.1.100:81' },
-  { id: 'esp32_2', name: 'ESP32-CAM 2', ip: 'http://192.168.1.101:81' },
-  { id: 'esp32_3', name: 'ESP32-CAM 3', ip: 'http://192.168.1.102:81' },
   { id: 'esp32_custom', name: '✏️ Custom ESP32 IP', ip: 'custom' }, // NEW: Custom option
 ];
 
@@ -38,10 +42,12 @@ interface StreamTileConfig {
   parkingId?: string; // NEW: Parking Lot ID
   cameraId?: string; // NEW: Camera ID
   isCheckInCamera?: boolean; // NEW: Is this the check-in camera (Cam1)?
+  showDetection?: boolean; // NEW: Show detection stream
 }
 
 interface StreamTileProps extends StreamTileConfig {
   onRemove: (id: string) => void;
+  onToggleDetection: (id: string) => void; // NEW: Toggle detection
   isStreaming: boolean;
   ownerId?: string; // NEW: Owner ID for check-in
 }
@@ -54,12 +60,14 @@ function StreamViewerTile({
   label, 
   sourceType, 
   streamUrl, 
-  onRemove, 
+  onRemove,
+  onToggleDetection,
   isStreaming,
   parkingId,
   cameraId,
   isCheckInCamera,
   ownerId,
+  showDetection = false,
 }: StreamTileProps) {
   const [status, setStatus] = useState<TileStatus>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +77,39 @@ function StreamViewerTile({
   const [testCaptureImage, setTestCaptureImage] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ stage: string; percentage: number } | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+
+  // Get detection stream URL
+  const getDetectionStreamUrl = (rawStreamUrl: string): string => {
+    try {
+      // If it's a proxy URL, convert to detection proxy
+      if (rawStreamUrl.includes('/stream/proxy')) {
+        const url = new URL(rawStreamUrl, window.location.origin);
+        const esp32Url = url.searchParams.get('esp32_url');
+        if (esp32Url) {
+          return `${BACKEND_URL}/stream/detect?user_esp32=${encodeURIComponent(esp32Url)}`;
+        }
+      }
+      
+      // If it's a video file stream
+      if (rawStreamUrl.includes('mode=video_file')) {
+        // Replace /stream with /stream/detect
+        return rawStreamUrl.replace('/stream?', '/stream/detect?');
+      }
+      
+      // Default raw stream from backend
+      if (rawStreamUrl.includes('/stream') && !rawStreamUrl.includes('/stream/detect')) {
+        return rawStreamUrl.replace('/stream', '/stream/detect');
+      }
+      
+      return rawStreamUrl;
+    } catch (error) {
+      console.error('Error generating detection URL:', error);
+      return rawStreamUrl;
+    }
+  };
+
+  // Use detection URL if showDetection is true
+  const actualStreamUrl = showDetection ? getDetectionStreamUrl(streamUrl) : streamUrl;
 
   const handleImageError = () => {
     setStatus('error');
@@ -296,6 +337,19 @@ function StreamViewerTile({
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Detection Toggle Button */}
+          <button
+            onClick={() => onToggleDetection(id)}
+            className={`text-xs font-semibold px-3 py-1 rounded-full transition-all ${
+              showDetection
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+            }`}
+            title={showDetection ? 'Tắt detection' : 'Bật detection'}
+          >
+            {showDetection ? '🔍 ON' : '📹 RAW'}
+          </button>
+          
           {/* Status Badge */}
           <span
             className={`text-xs font-semibold px-2 py-1 rounded-full ${
@@ -330,7 +384,7 @@ function StreamViewerTile({
           <>
             <img
               ref={imgRef}
-              src={streamUrl}
+              src={actualStreamUrl}
               alt={label}
               className="w-full h-full object-contain"
               onError={handleImageError}
@@ -343,6 +397,14 @@ function StreamViewerTile({
               <div className="absolute top-3 left-3 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 animate-pulse">
                 <span className="w-2 h-2 bg-white rounded-full"></span>
                 LIVE
+              </div>
+            )}
+
+            {/* Detection Mode Indicator */}
+            {status === 'connected' && showDetection && (
+              <div className="absolute top-3 right-3 bg-blue-600 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2">
+                <span>🔍</span>
+                DETECTION
               </div>
             )}
 
@@ -535,6 +597,12 @@ export function MultiStreamViewerPage() {
   // NEW: Streaming control state
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   
+  // NEW: Saved ESP32 configs
+  const [savedESP32Configs, setSavedESP32Configs] = useState<ESP32Config[]>([]);
+  const [showSaveDialog, setShowSaveDialog] = useState<boolean>(false);
+  const [saveConfigName, setSaveConfigName] = useState<string>('');
+  const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
+  
   // Load parking lots
   useEffect(() => {
     if (!ownerId) return;
@@ -549,12 +617,89 @@ export function MultiStreamViewerPage() {
     loadParkingLots();
   }, [ownerId]);
 
+  // Load saved ESP32 configs
+  useEffect(() => {
+    if (!ownerId) return;
+    const loadESP32Configs = async () => {
+      try {
+        const configs = await getUserESP32Configs(ownerId);
+        setSavedESP32Configs(configs);
+        console.log(`✅ Loaded ${configs.length} saved ESP32 configs`);
+      } catch (error) {
+        console.error('Error loading ESP32 configs:', error);
+      }
+    };
+    loadESP32Configs();
+  }, [ownerId]);
+
+  // Handle save ESP32 config
+  const handleSaveESP32Config = async () => {
+    if (!ownerId || !customESP32IP.trim() || !saveConfigName.trim()) {
+      alert('Vui lòng nhập đầy đủ tên và IP address!');
+      return;
+    }
+
+    setIsSavingConfig(true);
+    try {
+      await saveESP32Config(ownerId, saveConfigName.trim(), customESP32IP.trim(), false);
+      
+      // Reload configs
+      const configs = await getUserESP32Configs(ownerId);
+      setSavedESP32Configs(configs);
+      
+      alert(`✅ Đã lưu ESP32 config: ${saveConfigName}`);
+      setShowSaveDialog(false);
+      setSaveConfigName('');
+    } catch (error) {
+      console.error('Error saving ESP32 config:', error);
+      alert('❌ Lỗi khi lưu config. Vui lòng thử lại.');
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
+  // Handle delete ESP32 config
+  const handleDeleteESP32Config = async (configId: string, configName: string) => {
+    if (!confirm(`Xóa ESP32 config "${configName}"?`)) {
+      return;
+    }
+
+    try {
+      await deleteESP32Config(configId);
+      
+      // Reload configs
+      const configs = await getUserESP32Configs(ownerId);
+      setSavedESP32Configs(configs);
+      
+      alert(`✅ Đã xóa config: ${configName}`);
+    } catch (error) {
+      console.error('Error deleting ESP32 config:', error);
+      alert('❌ Lỗi khi xóa config. Vui lòng thử lại.');
+    }
+  };
+
+  // Handle set default ESP32
+  const handleSetDefaultESP32 = async (configId: string) => {
+    try {
+      await setDefaultESP32(ownerId, configId);
+      
+      // Reload configs
+      const configs = await getUserESP32Configs(ownerId);
+      setSavedESP32Configs(configs);
+      
+      alert('✅ Đã đặt làm ESP32 mặc định');
+    } catch (error) {
+      console.error('Error setting default ESP32:', error);
+      alert('❌ Lỗi khi đặt ESP32 mặc định. Vui lòng thử lại.');
+    }
+  };
+
   // Get stream URL based on source type and ID
   const getStreamUrl = (type: SourceType, sourceId: string, customIP?: string): string => {
     switch (type) {
       case 'esp32': {
-        // If custom ESP32 and customIP provided
-        if (sourceId === 'esp32_custom' && customIP) {
+        // If custom ESP32 or saved ESP32 with customIP provided
+        if ((sourceId === 'esp32_custom' || sourceId === 'esp32_saved') && customIP) {
           // Ensure IP has protocol
           const ip = customIP.startsWith('http') ? customIP : `http://${customIP}`;
           // Proxy through backend
@@ -582,8 +727,8 @@ export function MultiStreamViewerPage() {
   const getDefaultLabel = (type: SourceType, sourceId: string, customIP?: string): string => {
     switch (type) {
       case 'esp32': {
-        if (sourceId === 'esp32_custom' && customIP) {
-          return `Custom ESP32 (${customIP})`;
+        if ((sourceId === 'esp32_custom' || sourceId === 'esp32_saved') && customIP) {
+          return `ESP32 (${customIP})`;
         }
         const esp32 = ESP32_CAMERAS.find((cam) => cam.id === sourceId);
         return esp32 ? esp32.name : 'ESP32 Camera';
@@ -605,7 +750,7 @@ export function MultiStreamViewerPage() {
     }
 
     // Validate custom ESP32 IP
-    if (sourceType === 'esp32' && selectedSourceId === 'esp32_custom') {
+    if (sourceType === 'esp32' && (selectedSourceId === 'esp32_custom' || selectedSourceId === 'esp32_saved')) {
       if (!customESP32IP.trim()) {
         alert('Vui lòng nhập IP address của ESP32-CAM!');
         return;
@@ -614,7 +759,8 @@ export function MultiStreamViewerPage() {
 
     const streamUrl = getStreamUrl(sourceType, selectedSourceId, customESP32IP.trim());
     if (!streamUrl) {
-      alert('URL stream không hợp lệ!');
+      console.error('Invalid stream URL:', streamUrl);
+      alert('URL stream không hợp lệ! ');
       return;
     }
 
@@ -647,9 +793,22 @@ export function MultiStreamViewerPage() {
     setTiles((prev) => prev.filter((tile) => tile.id !== idToRemove));
   };
 
+  // Handle toggle detection
+  const handleToggleDetection = (idToToggle: string) => {
+    setTiles((prev) =>
+      prev.map((tile) =>
+        tile.id === idToToggle
+          ? { ...tile, showDetection: !tile.showDetection }
+          : tile
+      )
+    );
+  };
+
   // Check if can add
   const canAdd = selectedSourceId !== '' && 
-    (sourceType !== 'esp32' || selectedSourceId !== 'esp32_custom' || customESP32IP.trim() !== '');
+    (sourceType !== 'esp32' || 
+     (selectedSourceId !== 'esp32_custom' && selectedSourceId !== 'esp32_saved') || 
+     customESP32IP.trim() !== '');
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-strawberry-50 via-white to-matcha-50 p-6">
@@ -728,53 +887,184 @@ export function MultiStreamViewerPage() {
             {/* ESP32 Selection */}
             {sourceType === 'esp32' && (
               <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {ESP32_CAMERAS.map((cam) => (
-                    <button
-                      key={cam.id}
-                      onClick={() => {
-                        setSelectedSourceId(cam.id);
-                        if (cam.id !== 'esp32_custom') {
-                          setCustomESP32IP('');
-                        }
-                      }}
-                      className={`px-4 py-3 rounded-lg border-2 transition-all text-left ${
-                        selectedSourceId === cam.id
-                          ? 'border-strawberry-500 bg-strawberry-50 shadow-md'
-                          : 'border-gray-200 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-2xl">{cam.id === 'esp32_custom' ? '✏️' : '📹'}</span>
-                        <div className="flex-1">
-                          <div className="font-semibold text-gray-800">{cam.name}</div>
-                          {cam.ip !== 'custom' && (
-                            <div className="text-xs text-gray-500 font-mono truncate">
-                              {cam.ip}
+                {/* Saved ESP32 Configs */}
+                {savedESP32Configs.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-2">
+                      💾 Saved ESP32 Cameras:
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {savedESP32Configs.map((config) => (
+                        <button
+                          key={config.id}
+                          onClick={() => {
+                            setSelectedSourceId('esp32_saved');
+                            setCustomESP32IP(config.ipAddress);
+                            setCustomLabel(config.name);
+                          }}
+                          className={`px-4 py-3 rounded-lg border-2 transition-all text-left relative ${
+                            selectedSourceId === 'esp32_saved' && customESP32IP === config.ipAddress
+                              ? 'border-strawberry-500 bg-strawberry-50 shadow-md'
+                              : 'border-gray-200 bg-white hover:border-gray-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">{config.isDefault ? '⭐' : '📹'}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-gray-800 flex items-center gap-2">
+                                {config.name}
+                                {config.isDefault && (
+                                  <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded">
+                                    Default
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500 font-mono truncate">
+                                {config.ipAddress}
+                              </div>
                             </div>
+                            {selectedSourceId === 'esp32_saved' && customESP32IP === config.ipAddress && (
+                              <span className="text-strawberry-500">✓</span>
+                            )}
+                          </div>
+                          {/* Action buttons */}
+                          <div className="absolute top-2 right-2 flex gap-1">
+                            {!config.isDefault && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSetDefaultESP32(config.id);
+                                }}
+                                className="p-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-700 rounded text-xs"
+                                title="Đặt làm mặc định"
+                              >
+                                ⭐
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteESP32Config(config.id, config.name);
+                              }}
+                              className="p-1 bg-red-100 hover:bg-red-200 text-red-700 rounded text-xs"
+                              title="Xóa config"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Custom ESP32 Button */}
+                <div>
+                  {savedESP32Configs.length > 0 && (
+                    <label className="block text-xs font-medium text-gray-600 mb-2 mt-4">
+                      Or add new ESP32:
+                    </label>
+                  )}
+                  <div className="grid grid-cols-1 gap-3">
+                    {ESP32_CAMERAS.map((cam) => (
+                      <button
+                        key={cam.id}
+                        onClick={() => {
+                          setSelectedSourceId(cam.id);
+                          if (cam.id === 'esp32_custom') {
+                            setCustomESP32IP('');
+                            setCustomLabel('');
+                          }
+                        }}
+                        className={`px-4 py-3 rounded-lg border-2 transition-all text-left ${
+                          selectedSourceId === cam.id && selectedSourceId !== 'esp32_saved'
+                            ? 'border-strawberry-500 bg-strawberry-50 shadow-md'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">✏️</span>
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-800">{cam.name}</div>
+                            <div className="text-xs text-gray-500">Enter new IP address</div>
+                          </div>
+                          {selectedSourceId === cam.id && selectedSourceId !== 'esp32_saved' && (
+                            <span className="ml-auto text-strawberry-500">✓</span>
                           )}
                         </div>
-                        {selectedSourceId === cam.id && (
-                          <span className="ml-auto text-strawberry-500">✓</span>
-                        )}
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 
                 {/* Custom ESP32 IP Input */}
                 {selectedSourceId === 'esp32_custom' && (
-                  <div className="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
+                  <div className="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg space-y-4">
+                    {/* IP Input */}
                     <label className="block text-sm font-semibold text-yellow-900 mb-2">
                       ✏️ Nhập IP address của ESP32-CAM:
                     </label>
-                    <input
-                      type="text"
-                      value={customESP32IP}
-                      onChange={(e) => setCustomESP32IP(e.target.value)}
-                      placeholder="VD: 192.168.1.100:81 hoặc http://192.168.1.100:81"
-                      className="w-full px-4 py-2 border-2 border-yellow-400 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 font-mono text-sm"
-                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={customESP32IP}
+                        onChange={(e) => setCustomESP32IP(e.target.value)}
+                        placeholder="VD: 192.168.1.100:81 hoặc http://192.168.1.100:81"
+                        className="flex-1 px-4 py-2 border-2 border-yellow-400 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 font-mono text-sm"
+                      />
+                      <button
+                        onClick={() => setShowSaveDialog(true)}
+                        disabled={!customESP32IP.trim()}
+                        className={`px-4 py-2 rounded-lg font-semibold transition ${
+                          customESP32IP.trim()
+                            ? 'bg-green-500 text-white hover:bg-green-600'
+                            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        }`}
+                        title="Lưu config này"
+                      >
+                        💾 Save
+                      </button>
+                    </div>
+                    
+                    {/* Save Dialog */}
+                    {showSaveDialog && (
+                      <div className="mt-3 p-4 bg-green-50 border-2 border-green-300 rounded-lg">
+                        <label className="block text-sm font-semibold text-green-900 mb-2">
+                          💾 Đặt tên cho ESP32 config:
+                        </label>
+                        <input
+                          type="text"
+                          value={saveConfigName}
+                          onChange={(e) => setSaveConfigName(e.target.value)}
+                          placeholder="VD: ESP32 Cam1, Camera Bãi Xe"
+                          className="w-full px-4 py-2 border-2 border-green-400 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 mb-3"
+                          autoFocus
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleSaveESP32Config}
+                            disabled={isSavingConfig || !saveConfigName.trim()}
+                            className={`flex-1 px-4 py-2 rounded-lg font-semibold transition ${
+                              isSavingConfig || !saveConfigName.trim()
+                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                : 'bg-green-600 text-white hover:bg-green-700'
+                            }`}
+                          >
+                            {isSavingConfig ? '⏳ Đang lưu...' : '✅ Lưu'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowSaveDialog(false);
+                              setSaveConfigName('');
+                            }}
+                            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                          >
+                            Hủy
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    
                     <p className="mt-2 text-xs text-yellow-700">
                       💡 <strong>Lưu ý:</strong> Nhập IP:Port hoặc URL đầy đủ. Stream sẽ được proxy qua backend {BACKEND_URL}
                     </p>
@@ -967,6 +1257,35 @@ export function MultiStreamViewerPage() {
               </div>
               
               <div className="flex items-center gap-3">
+                {/* Global Detection Toggle */}
+                <button
+                  onClick={() => {
+                    const anyDetectionOn = tiles.some(t => t.showDetection);
+                    setTiles(prev => prev.map(tile => ({ ...tile, showDetection: !anyDetectionOn })));
+                  }}
+                  disabled={tiles.length === 0}
+                  className={`px-4 py-3 rounded-lg font-medium transition-all shadow-md ${
+                    tiles.length === 0
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : tiles.some(t => t.showDetection)
+                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  }`}
+                  title={tiles.some(t => t.showDetection) ? 'Tắt detection tất cả' : 'Bật detection tất cả'}
+                >
+                  {tiles.some(t => t.showDetection) ? (
+                    <>
+                      <span className="text-lg">🔍</span>
+                      <span className="ml-2 text-sm">Detection ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-lg">📹</span>
+                      <span className="ml-2 text-sm">Raw Mode</span>
+                    </>
+                  )}
+                </button>
+                
                 {/* START/STOP Button */}
                 <button
                   onClick={() => setIsStreaming(!isStreaming)}
@@ -1010,6 +1329,7 @@ export function MultiStreamViewerPage() {
                   key={tile.id}
                   {...tile}
                   onRemove={handleRemoveTile}
+                  onToggleDetection={handleToggleDetection}
                   isStreaming={isStreaming}
                   ownerId={ownerId}
                 />
