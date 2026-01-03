@@ -357,4 +357,93 @@ class FirebaseService:
         except Exception as e:
             print(f"❌ Error resolving alert: {e}")
             return False
+    
+    # ========== USER ESP32 CONFIGURATION ==========
+    
+    async def save_user_esp32_config(self, user_id: str, esp32_url: str, label: Optional[str] = None) -> bool:
+        """
+        Save user's ESP32-CAM configuration
+        
+        Args:
+            user_id: Firebase user ID
+            esp32_url: ESP32-CAM URL (e.g., http://192.168.1.100:81)
+            label: Optional label for this ESP32 (e.g., "Main Entrance", "Parking Area A")
+        
+        Returns:
+            True if successful
+        """
+        if not self.db:
+            print("⚠️  Firebase not initialized, skipping save")
+            return False
+        
+        try:
+            doc_data = {
+                "esp32_url": esp32_url,
+                "label": label or "My ESP32-CAM",
+                "updated_at": firestore.SERVER_TIMESTAMP,
+                "created_at": firestore.SERVER_TIMESTAMP,
+            }
+            
+            # Use user_id as document ID for easy retrieval
+            self.db.collection("user_esp32_configs").document(user_id).set(
+                doc_data,
+                merge=True  # Update existing or create new
+            )
+            
+            print(f"✅ Saved ESP32 config for user {user_id}: {esp32_url}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error saving ESP32 config: {e}")
+            return False
+    
+    async def get_user_esp32_config(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user's ESP32-CAM configuration
+        
+        Args:
+            user_id: Firebase user ID
+        
+        Returns:
+            Dict with esp32_url and label, or None if not found
+        """
+        if not self.db:
+            return None
+        
+        try:
+            doc = self.db.collection("user_esp32_configs").document(user_id).get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                print(f"✅ Retrieved ESP32 config for user {user_id}: {data.get('esp32_url')}")
+                return data
+            else:
+                print(f"ℹ️  No ESP32 config found for user {user_id}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error getting ESP32 config: {e}")
+            return None
+    
+    async def delete_user_esp32_config(self, user_id: str) -> bool:
+        """
+        Delete user's ESP32-CAM configuration
+        
+        Args:
+            user_id: Firebase user ID
+        
+        Returns:
+            True if successful
+        """
+        if not self.db:
+            return False
+        
+        try:
+            self.db.collection("user_esp32_configs").document(user_id).delete()
+            print(f"✅ Deleted ESP32 config for user {user_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error deleting ESP32 config: {e}")
+            return False
 

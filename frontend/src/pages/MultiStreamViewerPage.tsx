@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { API_CONFIG } from '../config/api';
 import { performVehicleCheckIn } from '../services/checkInService';
 import { getParkingLotsByOwner } from '../services/parkingLotService';
 import type { ParkingLot } from '../types/parkingLot.types';
@@ -9,11 +8,15 @@ import type { ParkingLot } from '../types/parkingLot.types';
 // STREAM SOURCE CONFIGURATION
 // ============================================
 
-// ESP32-CAM IP Addresses (Cấu hình 3 ESP32)
+// Get backend URL from environment variable
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8069';
+
+// ESP32-CAM IP Addresses (Predefined options)
 const ESP32_CAMERAS = [
-  { id: 'esp32_1', name: 'ESP32-CAM 1', ip: 'http://192.168.1.100:81/stream' },
-  { id: 'esp32_2', name: 'ESP32-CAM 2', ip: 'http://192.168.1.101:81/stream' },
-  { id: 'esp32_3', name: 'ESP32-CAM 3', ip: 'http://192.168.1.102:81/stream' },
+  { id: 'esp32_1', name: 'ESP32-CAM 1', ip: 'http://192.168.1.100:81' },
+  { id: 'esp32_2', name: 'ESP32-CAM 2', ip: 'http://192.168.1.101:81' },
+  { id: 'esp32_3', name: 'ESP32-CAM 3', ip: 'http://192.168.1.102:81' },
+  { id: 'esp32_custom', name: '✏️ Custom ESP32 IP', ip: 'custom' }, // NEW: Custom option
 ];
 
 // Video Files (Cấu hình 3 video files)
@@ -23,10 +26,7 @@ const VIDEO_FILES = [
   { id: 'video_3', name: 'Video 3 - Parking C', filename: 'parking_c.mp4' },
 ];
 
-// FastAPI endpoints
-const FASTAPI_BASE = API_CONFIG.baseURL;
-
-type SourceType = 'esp32' | 'video' | 'mock';
+type SourceType = 'esp32' | 'video';
 type TileStatus = 'idle' | 'connected' | 'error';
 
 interface StreamTileConfig {
@@ -116,7 +116,7 @@ function StreamViewerTile({
           
           try {
             const response = await fetch(
-              `${FASTAPI_BASE}/api/stream/snapshot?mode=video_file&file=${encodeURIComponent(file)}`,
+              `${BACKEND_URL}/api/stream/snapshot?mode=video_file&file=${encodeURIComponent(file)}`,
               { signal: controller.signal }
             );
             clearTimeout(timeoutId);
@@ -264,8 +264,6 @@ function StreamViewerTile({
         return '📹';
       case 'video':
         return '🎬';
-      case 'mock':
-        return '🧪';
       default:
         return '📺';
         }
@@ -277,8 +275,6 @@ function StreamViewerTile({
         return 'ESP32-CAM';
       case 'video':
         return 'Video File';
-      case 'mock':
-        return 'Mock Stream';
       default:
         return 'Unknown';
     }
@@ -528,6 +524,7 @@ export function MultiStreamViewerPage() {
   const [sourceType, setSourceType] = useState<SourceType>('esp32');
   const [selectedSourceId, setSelectedSourceId] = useState<string>('');
   const [customLabel, setCustomLabel] = useState<string>('');
+  const [customESP32IP, setCustomESP32IP] = useState<string>(''); // NEW: Custom ESP32 IP input
   
   // NEW: Parking and camera config
   const [parkingId, setParkingId] = useState<string>('');
@@ -553,27 +550,41 @@ export function MultiStreamViewerPage() {
   }, [ownerId]);
 
   // Get stream URL based on source type and ID
-  const getStreamUrl = (type: SourceType, sourceId: string): string => {
+  const getStreamUrl = (type: SourceType, sourceId: string, customIP?: string): string => {
     switch (type) {
       case 'esp32': {
+        // If custom ESP32 and customIP provided
+        if (sourceId === 'esp32_custom' && customIP) {
+          // Ensure IP has protocol
+          const ip = customIP.startsWith('http') ? customIP : `http://${customIP}`;
+          // Proxy through backend
+          return `${BACKEND_URL}/stream/proxy?esp32_url=${encodeURIComponent(ip)}`;
+        }
+        
+        // Predefined ESP32
         const esp32 = ESP32_CAMERAS.find((cam) => cam.id === sourceId);
-        return esp32 ? esp32.ip : '';
+        if (esp32 && esp32.ip !== 'custom') {
+          // Proxy through backend
+          return `${BACKEND_URL}/stream/proxy?esp32_url=${encodeURIComponent(esp32.ip)}`;
+        }
+        return '';
       }
       case 'video': {
         const video = VIDEO_FILES.find((vid) => vid.id === sourceId);
-        return video ? `${FASTAPI_BASE}/stream?mode=video_file&file=${video.filename}` : '';
+        return video ? `${BACKEND_URL}/stream?mode=video_file&file=${video.filename}` : '';
       }
-      case 'mock':
-        return `${FASTAPI_BASE}/stream?mode=mock`;
       default:
         return '';
     }
   };
 
   // Get default label based on source
-  const getDefaultLabel = (type: SourceType, sourceId: string): string => {
+  const getDefaultLabel = (type: SourceType, sourceId: string, customIP?: string): string => {
     switch (type) {
       case 'esp32': {
+        if (sourceId === 'esp32_custom' && customIP) {
+          return `Custom ESP32 (${customIP})`;
+        }
         const esp32 = ESP32_CAMERAS.find((cam) => cam.id === sourceId);
         return esp32 ? esp32.name : 'ESP32 Camera';
       }
@@ -581,8 +592,6 @@ export function MultiStreamViewerPage() {
         const video = VIDEO_FILES.find((vid) => vid.id === sourceId);
         return video ? video.name : 'Video Stream';
     }
-      case 'mock':
-        return 'Mock FFmpeg Stream';
       default:
         return 'Camera Stream';
     }
@@ -590,18 +599,26 @@ export function MultiStreamViewerPage() {
 
   // Handle add tile
   const handleAddTile = () => {
-    if (!selectedSourceId && sourceType !== 'mock') {
+    if (!selectedSourceId) {
       alert('Vui lòng chọn nguồn stream!');
       return;
     }
 
-    const streamUrl = getStreamUrl(sourceType, selectedSourceId);
+    // Validate custom ESP32 IP
+    if (sourceType === 'esp32' && selectedSourceId === 'esp32_custom') {
+      if (!customESP32IP.trim()) {
+        alert('Vui lòng nhập IP address của ESP32-CAM!');
+        return;
+      }
+    }
+
+    const streamUrl = getStreamUrl(sourceType, selectedSourceId, customESP32IP.trim());
     if (!streamUrl) {
       alert('URL stream không hợp lệ!');
       return;
     }
 
-    const defaultLabel = getDefaultLabel(sourceType, selectedSourceId);
+    const defaultLabel = getDefaultLabel(sourceType, selectedSourceId, customESP32IP.trim());
     const finalLabel = customLabel.trim() || defaultLabel;
 
     const newTile: StreamTileConfig = {
@@ -619,6 +636,7 @@ export function MultiStreamViewerPage() {
     
     // Reset form
     setCustomLabel('');
+    setCustomESP32IP('');
     setParkingId('');
     setCameraId('');
     setIsCheckInCamera(false);
@@ -630,7 +648,8 @@ export function MultiStreamViewerPage() {
   };
 
   // Check if can add
-  const canAdd = sourceType === 'mock' || (selectedSourceId !== '');
+  const canAdd = selectedSourceId !== '' && 
+    (sourceType !== 'esp32' || selectedSourceId !== 'esp32_custom' || customESP32IP.trim() !== '');
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-strawberry-50 via-white to-matcha-50 p-6">
@@ -657,12 +676,13 @@ export function MultiStreamViewerPage() {
             <label className="block text-sm font-medium text-gray-700 mb-3">
               1️⃣ Chọn loại nguồn stream
             </label>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {/* ESP32 */}
               <button
                 onClick={() => {
                   setSourceType('esp32');
                   setSelectedSourceId('');
+                  setCustomESP32IP('');
                 }}
                 className={`px-4 py-3 rounded-lg font-medium transition-all ${
                   sourceType === 'esp32'
@@ -672,7 +692,7 @@ export function MultiStreamViewerPage() {
               >
                 <div className="text-3xl mb-1">📹</div>
                 <div>ESP32-CAM</div>
-                <div className="text-xs opacity-75">IP Camera</div>
+                <div className="text-xs opacity-75">IP Camera (via Backend)</div>
               </button>
 
               {/* Video File */}
@@ -680,6 +700,7 @@ export function MultiStreamViewerPage() {
                 onClick={() => {
                   setSourceType('video');
                   setSelectedSourceId('');
+                  setCustomESP32IP('');
                 }}
                 className={`px-4 py-3 rounded-lg font-medium transition-all ${
                   sourceType === 'video'
@@ -691,40 +712,32 @@ export function MultiStreamViewerPage() {
                 <div>Video File</div>
                 <div className="text-xs opacity-75">Test Video</div>
               </button>
-
-              {/* Mock FFmpeg */}
-              <button
-                onClick={() => {
-                  setSourceType('mock');
-                  setSelectedSourceId('mock');
-                }}
-                className={`px-4 py-3 rounded-lg font-medium transition-all ${
-                  sourceType === 'mock'
-                    ? 'bg-purple-500 text-white shadow-lg ring-2 ring-purple-300'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                <div className="text-3xl mb-1">🧪</div>
-                <div>Mock FFmpeg</div>
-                <div className="text-xs opacity-75">FFmpeg Stream</div>
-              </button>
+            </div>
+            
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+              <strong>💡 Lưu ý:</strong> Tất cả streams đều đi qua backend (<code className="bg-blue-100 px-1 rounded">{BACKEND_URL}</code>)
             </div>
           </div>
 
           {/* Source Selection (ESP32 or Video) */}
-          {sourceType !== 'mock' && (
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                2️⃣ Chọn nguồn cụ thể
-              </label>
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              2️⃣ Chọn nguồn cụ thể
+            </label>
 
-              {/* ESP32 Selection */}
-              {sourceType === 'esp32' && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {/* ESP32 Selection */}
+            {sourceType === 'esp32' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {ESP32_CAMERAS.map((cam) => (
                     <button
                       key={cam.id}
-                      onClick={() => setSelectedSourceId(cam.id)}
+                      onClick={() => {
+                        setSelectedSourceId(cam.id);
+                        if (cam.id !== 'esp32_custom') {
+                          setCustomESP32IP('');
+                        }
+                      }}
                       className={`px-4 py-3 rounded-lg border-2 transition-all text-left ${
                         selectedSourceId === cam.id
                           ? 'border-strawberry-500 bg-strawberry-50 shadow-md'
@@ -732,12 +745,14 @@ export function MultiStreamViewerPage() {
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        <span className="text-2xl">📹</span>
-                        <div>
+                        <span className="text-2xl">{cam.id === 'esp32_custom' ? '✏️' : '📹'}</span>
+                        <div className="flex-1">
                           <div className="font-semibold text-gray-800">{cam.name}</div>
-                          <div className="text-xs text-gray-500 font-mono truncate">
-                            {cam.ip}
-                          </div>
+                          {cam.ip !== 'custom' && (
+                            <div className="text-xs text-gray-500 font-mono truncate">
+                              {cam.ip}
+                            </div>
+                          )}
                         </div>
                         {selectedSourceId === cam.id && (
                           <span className="ml-auto text-strawberry-500">✓</span>
@@ -746,44 +761,66 @@ export function MultiStreamViewerPage() {
                     </button>
                   ))}
                 </div>
-              )}
+                
+                {/* Custom ESP32 IP Input */}
+                {selectedSourceId === 'esp32_custom' && (
+                  <div className="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
+                    <label className="block text-sm font-semibold text-yellow-900 mb-2">
+                      ✏️ Nhập IP address của ESP32-CAM:
+                    </label>
+                    <input
+                      type="text"
+                      value={customESP32IP}
+                      onChange={(e) => setCustomESP32IP(e.target.value)}
+                      placeholder="VD: 192.168.1.100:81 hoặc http://192.168.1.100:81"
+                      className="w-full px-4 py-2 border-2 border-yellow-400 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 font-mono text-sm"
+                    />
+                    <p className="mt-2 text-xs text-yellow-700">
+                      💡 <strong>Lưu ý:</strong> Nhập IP:Port hoặc URL đầy đủ. Stream sẽ được proxy qua backend {BACKEND_URL}
+                    </p>
+                    <p className="mt-1 text-xs text-yellow-600">
+                      Ví dụ: <code className="bg-yellow-100 px-1 rounded">192.168.1.100:81</code> hoặc <code className="bg-yellow-100 px-1 rounded">http://192.168.1.100:81</code>
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
-              {/* Video File Selection */}
-              {sourceType === 'video' && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {VIDEO_FILES.map((video) => (
-                    <button
-                      key={video.id}
-                      onClick={() => setSelectedSourceId(video.id)}
-                      className={`px-4 py-3 rounded-lg border-2 transition-all text-left ${
-                        selectedSourceId === video.id
-                          ? 'border-matcha-500 bg-matcha-50 shadow-md'
-                          : 'border-gray-200 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-2xl">🎬</span>
-          <div>
-                          <div className="font-semibold text-gray-800">{video.name}</div>
-                          <div className="text-xs text-gray-500 font-mono">
-                            {video.filename}
-                          </div>
+            {/* Video File Selection */}
+            {sourceType === 'video' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {VIDEO_FILES.map((video) => (
+                  <button
+                    key={video.id}
+                    onClick={() => setSelectedSourceId(video.id)}
+                    className={`px-4 py-3 rounded-lg border-2 transition-all text-left ${
+                      selectedSourceId === video.id
+                        ? 'border-matcha-500 bg-matcha-50 shadow-md'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">🎬</span>
+                      <div>
+                        <div className="font-semibold text-gray-800">{video.name}</div>
+                        <div className="text-xs text-gray-500 font-mono">
+                          {video.filename}
                         </div>
-                        {selectedSourceId === video.id && (
-                          <span className="ml-auto text-matcha-500">✓</span>
-                        )}
                       </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                      {selectedSourceId === video.id && (
+                        <span className="ml-auto text-matcha-500">✓</span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Custom Label */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              {sourceType === 'mock' ? '2️⃣' : '3️⃣'} Tên hiển thị (tùy chọn)
+              3️⃣ Tên hiển thị (tùy chọn)
             </label>
               <input
                 type="text"
@@ -797,7 +834,7 @@ export function MultiStreamViewerPage() {
           {/* Parking & Camera Config */}
           <div className="mb-6 space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
             <label className="block text-sm font-semibold text-blue-900 mb-2">
-              {sourceType === 'mock' ? '3️⃣' : '4️⃣'} Cấu hình Parking & Camera
+              4️⃣ Cấu hình Parking & Camera
             </label>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

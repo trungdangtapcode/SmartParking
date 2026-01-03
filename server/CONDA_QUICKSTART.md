@@ -144,7 +144,7 @@ conda env create -f environment.yml
 # Hoặc tạo thủ công với pip
 conda create -n smartparking python=3.10 -y
 conda activate smartparking
-pip install -r requirements_fastapi.txt
+pip install -r requirements.txt
 ```
 
 ### **❌ "ImportError: DLL load failed" (Windows)**

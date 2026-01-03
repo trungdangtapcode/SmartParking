@@ -1,18 +1,46 @@
-# Core dependencies
-opencv-python>=4.8.0
-numpy>=2.0.0,<2.3.0
+# ========================================
+# SmartParking Backend Requirements
+# Python >= 3.10 (scheduler environment)
+# ========================================
 
-# Object Detection & Tracking
-# ultralytics includes YOLO with built-in ByteTrack algorithm
-# No need to install byte-track separately!
-ultralytics>=8.0.0
-lap>=0.4.0  # Linear Assignment Problem solver - required for tracking
+# ========== Web Framework ==========
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0       # ASGI server with websockets
+python-multipart>=0.0.6         # File upload support
+aiohttp>=3.9.0                  # Async HTTP client (ESP32 proxy)
+websockets>=12.0                # WebSocket support
+python-dotenv>=1.0.0            # Environment variables (.env file)
 
-# Optional: SAM3 (Segment Anything Model 3)
-# Note: SAM3 may require additional setup from GitHub
-# Uncomment and install if you want to use SAM3:
-# git+https://github.com/facebookresearch/segment-anything-3.git
+# ========== Computer Vision & AI ==========
+opencv-python>=4.8.0            # OpenCV for image processing
+numpy>=2.0.0,<2.3.0             # NumPy (compatible with latest versions)
 
-# License Plate Recognition (already installed)
-fast-alpr[onnx]>=0.3.0
+# YOLO & Object Tracking
+ultralytics>=8.0.0              # YOLOv8 with built-in ByteTrack algorithm
+lap>=0.4.0                      # Linear Assignment Problem solver (tracking)
 
+# License Plate Recognition
+fast-alpr[onnx]>=0.3.0          # ALPR with ONNX runtime
+
+# ========== GPU Support (CUDA) ==========
+# PyTorch with CUDA support (automatically uses GPU if available)
+torch>=2.0.0                    # PyTorch (will auto-detect CUDA)
+torchvision>=0.15.0             # Vision utilities for PyTorch
+
+# Note: If you have NVIDIA GPU, torch will automatically use CUDA
+# To verify GPU: python -c "import torch; print(torch.cuda.is_available())"
+
+# ========== Firebase ==========
+firebase-admin>=6.2.0           # Firebase Admin SDK for authentication & database
+
+# ========================================
+# Installation Instructions:
+# ========================================
+# conda activate scheduler
+# pip install -r requirements.txt
+#
+# For GPU support, ensure:
+# - NVIDIA drivers installed
+# - CUDA toolkit installed (11.8 or 12.1)
+# - cuDNN installed
+# ========================================

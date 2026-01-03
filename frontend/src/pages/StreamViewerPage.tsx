@@ -6,7 +6,7 @@ import {
   createHighQualityAnswer,
 } from '../utils/webrtcQuality';
 
-const STREAM_URL = 'http://localhost:8000/stream';
+// const STREAM_URL = 'http://localhost:8000/stream';
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 const PARKING_ID_REGEX = /^[A-Za-z0-9]+$/;
 
