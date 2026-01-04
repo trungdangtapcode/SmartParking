@@ -1,0 +1,39 @@
+OUTPUT_DIR: "output/parking_mtmc"
+DEBUG_RUN: false
+FONTSIZE: 11
+MOT:
+  REID_MODEL_OPTS: "models/resnet50_mixstyle/opts.yaml"
+  REID_MODEL_CKPT: "models/resnet50_mixstyle/net_19.pth"
+  # REID_MODEL_OPTS: "models/efficientnetb0/opts.yaml"  # EfficientNet-B0 (512D features)
+  # REID_MODEL_CKPT: "models/efficientnetb0/net_19.pth"  # null = use raw pretrained model without fine-tuning
+  REID_BATCHSIZE: 32    # Larger batch = better GPU utilization (was 16)
+  DETECTOR: "yolov8s_car_custom.pt"
+  TRACKER: "bytetrack_iou"
+  # TRACKER: "deepsort"`
+  TRACKED_CLASSES: [0]  # Custom model uses class 0 for cars
+  MIN_FRAMES: 3
+  SHOW: false 
+  VIDEO_OUTPUT: false
+  ONLINE_VIDEO_OUTPUT: false
+  STATIC_ATTRIBUTES:    # Disabled - SVM trained on ResNet50 (2048D), incompatible with EfficientNet (512D)
+    - color: "models/color_svm.pkl"
+    - type: "models/type_svm.pkl"
+  ATTRIBUTE_INFER_BATCHSIZE: 32
+  REFINE: false
+  REID_ONNX: "models/resnet50_mixstyle/model.onnx"  # ONNX model (gets TensorRT acceleration at runtime)
+MTMC:
+  CAMERA_LAYOUT: 'config/examples/parking_camera_layout.txt'
+  LINKAGE: 'average'
+  MIN_SIM: 0.5
+EXPRESS:
+  FINAL_VIDEO_OUTPUT: true
+  CAMERAS:
+    - "video": "datasets/parking_a_75sec_8fps.mp4"
+      "detector": "yolov8s"  
+      "tracked_classes": [1, 2, 3, 5, 7]
+    - "video": "datasets/parking_b_75sec_8fps.mp4"
+      "detector": "yolov8s_car_custom"  
+      "tracked_classes": [0]
+    - "video": "datasets/parking_c_75sec_8fps.mp4"
+      "detector": "yolov8s_car_custom" 
+      "tracked_classes": [0]

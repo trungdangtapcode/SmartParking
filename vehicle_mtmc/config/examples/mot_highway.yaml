@@ -1,0 +1,27 @@
+OUTPUT_DIR: "output/mot_highway"
+FONTSIZE: 11
+MOT:
+  VIDEO: "datasets/parking_a_30sec.mp4"
+  # VIDEO: "datasets/highway_1min.mp4"
+  REID_MODEL_OPTS: "models/resnet50_mixstyle/opts.yaml"
+  REID_MODEL_CKPT: "models/resnet50_mixstyle/net_19.pth"
+  # CALIBRATION: "config/examples/highway_calibration.txt"
+  CALIBRATION: null
+  REID_FP16: false
+  REID_BATCHSIZE: 1
+  # DETECTOR: "yolov5x6"
+  DETECTOR: "yolov8s"
+  # DETECTOR: "yolov8s_car_custom.pt"
+  TRACKER: "bytetrack_iou" # bytetrack_iou, deepsort
+  # TRACKED_CLASSES: [0]  # Custom model uses class 0 for cars
+  TRACKED_CLASSES: [1, 2, 3, 5, 7]
+  # MIN_FRAMES: 3  # Lower threshold for debugging
+  # DETECTION_MASK: "assets/highway_mask.jpg"
+  DETECTION_MASK: null  # Removed - highway mask doesn't match parking video
+  SHOW: false
+  VIDEO_OUTPUT: true
+  STATIC_ATTRIBUTES:
+    - color: "models/color_svm.pkl"
+    - type: "models/type_svm.pkl"
+  ATTRIBUTE_INFER_BATCHSIZE: 1
+  REFINE: false
