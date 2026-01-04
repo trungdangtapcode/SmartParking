@@ -32,6 +32,29 @@ export interface ParkingLot {
 }
 
 /**
+ * Parking Space Definition - Collection: parkingSpaceDefinitions
+ * Định nghĩa vị trí các parking spaces trên camera (do user config)
+ */
+export interface ParkingSpaceDefinition {
+  // Space Identity
+  id: string;                    // "space-001"
+  parkingId: string;             // "PARKING_A"
+  cameraId: string;              // "CAM001" or ESP32 config ID
+  name: string;                  // "A1", "A2", "B1" etc.
+  
+  // Location (normalized 0-1 based on image dimensions)
+  x: number;                     // x position (0-1)
+  y: number;                     // y position (0-1)
+  width: number;                 // width (0-1)
+  height: number;                // height (0-1)
+  
+  // Metadata
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  createdBy: string;             // User ID who created this space
+}
+
+/**
  * Parking Space Status - Collection: parkingSpaces
  * Track trạng thái từng parking slot (Phase 2 - Tracking)
  */

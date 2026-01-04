@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 import sys
+import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
@@ -27,18 +28,24 @@ from esp32_client import ESP32Client
 # Import routers
 from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams
 
+# Import worker
+from parking_monitor_worker import ParkingMonitorWorker
+
 # Global instances
 ai_service = None
 firebase_service = None
 esp32_client = None
+parking_worker = None
 
 # Configuration
 ESP32_URL = os.getenv("ESP32_URL", "http://localhost:5069")
+ENABLE_PARKING_MONITOR = os.getenv("ENABLE_PARKING_MONITOR", "true").lower() == "true"
+MONITOR_CHECK_INTERVAL = int(os.getenv("MONITOR_CHECK_INTERVAL", "5"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager - load models on server start"""
-    global ai_service, firebase_service, esp32_client
+    global ai_service, firebase_service, esp32_client, parking_worker
     
     print("🚀 Starting FastAPI SmartParking Server...")
     
@@ -80,10 +87,28 @@ async def lifespan(app: FastAPI):
     ai_detection.init_router(ai_service, firebase_service)
     firebase.init_router(firebase_service)
     
+    # Start parking monitor worker (optional)
+    if ENABLE_PARKING_MONITOR and firebase_service:
+        print(f"👁️  Starting parking monitor worker (interval: {MONITOR_CHECK_INTERVAL}s)...")
+        parking_worker = ParkingMonitorWorker(
+            check_interval=MONITOR_CHECK_INTERVAL,
+            detection_url="http://localhost:8069"
+        )
+        # Start worker in background
+        asyncio.create_task(parking_worker.start())
+        print("✅ Parking monitor worker started")
+    elif not ENABLE_PARKING_MONITOR:
+        print("⏸️  Parking monitor worker disabled (set ENABLE_PARKING_MONITOR=true to enable)")
+    
     yield  # Server runs here
     
     # Cleanup on shutdown
     print("🛑 Shutting down server...")
+    
+    # Stop parking worker
+    if parking_worker:
+        print("🛑 Stopping parking monitor worker...")
+        parking_worker.stop()
     
     # Stop all broadcasters
     print("📡 Stopping broadcasters...")

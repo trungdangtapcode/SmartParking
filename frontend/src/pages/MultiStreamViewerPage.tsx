@@ -883,30 +883,6 @@ export function MultiStreamViewerPage() {
             <span>Thêm Stream Mới</span>
           </h2>
 
-          {/* CRITICAL WARNING - HOW TO SAVE CAMERAS */}
-          <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-400 rounded-xl shadow-md">
-            <div className="flex items-start gap-3">
-              <span className="text-4xl">💡</span>
-              <div className="flex-1">
-                <h3 className="font-bold text-lg text-blue-900 mb-2">
-                  🎯 Cách lưu camera để sử dụng lại
-                </h3>
-                <div className="space-y-2 text-sm text-blue-800">
-                  <p className="font-semibold">
-                    📝 Để camera được lưu vào Firebase và xuất hiện trong <code className="bg-blue-100 px-2 py-1 rounded">/stream/host-multi</code>:
-                  </p>
-                  <div className="ml-4 space-y-1">
-                    <p>✅ <strong>Chọn Parking Lot ID</strong> từ dropdown bên dưới</p>
-                    <p>✅ <strong>Camera ID sẽ tự động tạo</strong> từ tên nguồn stream (ESP32 IP hoặc tên video)</p>
-                  </div>
-                  <p className="mt-3 p-3 bg-green-100 border border-green-400 rounded">
-                    <strong>🎉 ĐƠN GIẢN:</strong> Chỉ cần chọn Parking Lot → Camera tự động lưu → Sử dụng lại ở /stream/host-multi!
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Source Type Selection */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-3">
@@ -1515,6 +1491,30 @@ cd server
             </div>
           </div>
         </details>
+
+        {/* HOW TO SAVE CAMERAS - BOTTOM */}
+        <div className="mt-8 mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-400 rounded-xl shadow-md">
+          <div className="flex items-start gap-3">
+            <span className="text-4xl">💡</span>
+            <div className="flex-1">
+              <h3 className="font-bold text-lg text-blue-900 mb-2">
+                🎯 Cách lưu camera để sử dụng lại
+              </h3>
+              <div className="space-y-2 text-sm text-blue-800">
+                <p className="font-semibold">
+                  📝 Để camera được lưu vào Firebase và xuất hiện trong <code className="bg-blue-100 px-2 py-1 rounded">/stream/host-multi</code>:
+                </p>
+                <div className="ml-4 space-y-1">
+                  <p>✅ <strong>Chọn Parking Lot ID</strong> từ dropdown</p>
+                  <p>✅ <strong>Camera ID sẽ tự động tạo</strong> từ tên nguồn stream (ESP32 IP hoặc tên video)</p>
+                </div>
+                <p className="mt-3 p-3 bg-green-100 border border-green-400 rounded">
+                  <strong>🎉 ĐƠN GIẢN:</strong> Chỉ cần chọn Parking Lot → Camera tự động lưu → Sử dụng lại ở /stream/host-multi!
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Quick Navigation - Bottom */}
         <div className="mt-8 pt-6 border-t border-gray-200">

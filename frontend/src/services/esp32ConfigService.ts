@@ -9,6 +9,7 @@ export interface ESP32Config {
   createdAt: Date;
   updatedAt: Date;
   isDefault?: boolean; // Mark as default ESP32
+  workerEnabled?: boolean; // Enable background worker monitoring for this camera
 }
 
 /**
@@ -169,6 +170,45 @@ export async function setDefaultESP32(userId: string, configId: string): Promise
     console.log('✅ Default ESP32 set:', configId);
   } catch (error) {
     console.error('❌ Error setting default ESP32:', error);
+    throw error;
+  }
+}
+
+/**
+ * Enable worker monitoring for a camera
+ */
+export async function enableWorkerForCamera(configId: string): Promise<void> {
+  try {
+    await updateESP32Config(configId, { workerEnabled: true });
+    console.log('✅ Worker enabled for camera:', configId);
+  } catch (error) {
+    console.error('❌ Error enabling worker:', error);
+    throw error;
+  }
+}
+
+/**
+ * Disable worker monitoring for a camera
+ */
+export async function disableWorkerForCamera(configId: string): Promise<void> {
+  try {
+    await updateESP32Config(configId, { workerEnabled: false });
+    console.log('✅ Worker disabled for camera:', configId);
+  } catch (error) {
+    console.error('❌ Error disabling worker:', error);
+    throw error;
+  }
+}
+
+/**
+ * Toggle worker status for a camera
+ */
+export async function toggleWorkerForCamera(configId: string, enabled: boolean): Promise<void> {
+  try {
+    await updateESP32Config(configId, { workerEnabled: enabled });
+    console.log(`✅ Worker ${enabled ? 'enabled' : 'disabled'} for camera:`, configId);
+  } catch (error) {
+    console.error('❌ Error toggling worker:', error);
     throw error;
   }
 }

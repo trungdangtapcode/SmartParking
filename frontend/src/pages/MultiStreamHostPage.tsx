@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { fetchLatestDetections, type DetectionRecord } from '../services/detectionService';
 import { createStreamSession, updateStreamSessionStatus } from '../services/streamService';
-import { getParkingLotsByOwner } from '../services/parkingLotService';
+import { getParkingLotsByOwner, addCameraToParkingLot } from '../services/parkingLotService';
 import { 
   getUserESP32Configs,
   type ESP32Config 
@@ -257,6 +257,15 @@ function StreamHostTile({ id, parkingLotId, cameraId, ownerId, onRemove }: HostT
           streamSessionIdRef.current = result.id;
         }
         console.log(`[Host ${id}] Stream session created successfully`);
+        
+        // Add camera to parking lot cameras array
+        console.log(`[Host ${id}] Adding camera to parking lot...`);
+        const addCameraResult = await addCameraToParkingLot(parkingLotId.trim(), cameraId.trim());
+        if (addCameraResult.success) {
+          console.log(`[Host ${id}] ✅ Camera added to parking lot ${parkingLotId.trim()}`);
+        } else {
+          console.warn(`[Host ${id}] ⚠️ Failed to add camera to parking lot:`, addCameraResult.error);
+        }
       } catch (logErr) {
         console.warn(`[Host ${id}] Failed to create stream session:`, logErr);
       }
@@ -566,13 +575,29 @@ export function MultiStreamHostPage() {
     return true;
   };
 
-  const handleAddTile = () => {
+  const handleAddTile = async () => {
     if (!validateParkingId(parkingLotId) || !validateCameraId(cameraId)) {
       return;
     }
     const lot = parkingLotId.trim();
     const cam = cameraId.trim();
     const id = `${lot}__${cam}__${Date.now()}`;
+    
+    // Add camera to parking lot immediately
+    console.log(`[MultiStreamHost] Adding camera ${cam} to parking lot ${lot}...`);
+    try {
+      const result = await addCameraToParkingLot(lot, cam);
+      if (result.success) {
+        console.log(`[MultiStreamHost] ✅ Camera ${cam} added to parking lot ${lot}`);
+      } else {
+        console.warn(`[MultiStreamHost] ⚠️ Failed to add camera:`, result.error);
+        alert(`⚠️ Không thể thêm camera vào parking lot: ${result.error}`);
+      }
+    } catch (error) {
+      console.error(`[MultiStreamHost] ❌ Error adding camera:`, error);
+      alert(`❌ Lỗi khi thêm camera: ${error}`);
+    }
+    
     setTiles((prev) => {
       const exists = prev.some((t) => t.parkingLotId === lot && t.cameraId === cam);
       if (exists) return prev;
@@ -600,76 +625,6 @@ export function MultiStreamHostPage() {
             Chỉ Admin mới có quyền host stream.
           </div>
         )}
-      </div>
-
-      {/* Step-by-Step Guide */}
-      <div className="mb-6 bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-300 rounded-xl p-5">
-        <div className="flex items-start gap-3">
-          <span className="text-3xl">🎯</span>
-          <div className="flex-1">
-            <h3 className="text-lg font-bold text-gray-900 mb-3">
-              📚 Cách thêm camera vào Parking Lot
-            </h3>
-            <div className="grid md:grid-cols-3 gap-4">
-              {/* Step 1 */}
-              <div className="bg-white rounded-lg p-4 border-2 border-blue-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">1</span>
-                  <span className="font-bold text-gray-800">Chọn Parking Lot</span>
-                </div>
-                <p className="text-xs text-gray-600 mb-2">
-                  Chọn bãi đỗ xe từ dropdown bên dưới
-                </p>
-                <p className="text-xs text-blue-600">
-                  💡 Chưa có? Tạo tại <a href="/parking-lots" className="underline font-bold">/parking-lots</a>
-                </p>
-              </div>
-
-              {/* Step 2 */}
-              <div className="bg-white rounded-lg p-4 border-2 border-purple-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">2</span>
-                  <span className="font-bold text-gray-800">Chọn/Nhập Camera ID</span>
-                </div>
-                <p className="text-xs text-gray-600 mb-2">
-                  Chọn camera có sẵn hoặc nhập tên mới (VD: CAM1, ENTRANCE)
-                </p>
-                <p className="text-xs text-purple-600">
-                  💡 Camera sẽ được lưu để tái sử dụng
-                </p>
-              </div>
-
-              {/* Step 3 */}
-              <div className="bg-white rounded-lg p-4 border-2 border-green-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="bg-green-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">3</span>
-                  <span className="font-bold text-gray-800">Upload & Stream</span>
-                </div>
-                <p className="text-xs text-gray-600 mb-2">
-                  Click "➕ Thêm host", chọn video file, click "Bắt đầu phát"
-                </p>
-                <p className="text-xs text-green-600">
-                  ✅ Camera tự động xuất hiện trong parking lot!
-                </p>
-              </div>
-            </div>
-
-            {/* Result */}
-            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-300 rounded-lg">
-              <p className="text-sm text-gray-800">
-                <strong>🎉 Kết quả:</strong> Sau khi host, vào{' '}
-                <a href="/parking-lots" className="text-blue-600 underline font-bold hover:text-blue-800">
-                  /parking-lots
-                </a>
-                {' '}→ Chọn bãi đỗ xe → Camera của bạn sẽ xuất hiện trong danh sách! 
-                Hoặc xem tất cả camera tại{' '}
-                <a href="/stream/view-multi" className="text-blue-600 underline font-bold hover:text-blue-800">
-                  /stream/view-multi
-                </a>
-              </p>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* No Parking Lots Warning */}
@@ -793,7 +748,7 @@ export function MultiStreamHostPage() {
             >
               <option value="">-- Chọn ESP32 Camera --</option>
               {availableESP32Cameras.map((esp32) => (
-                <option key={esp32.id} value={esp32.name}>
+                <option key={esp32.id} value={esp32.id}>
                   📹 {esp32.name} ({esp32.ipAddress})
                 </option>
               ))}
@@ -866,6 +821,76 @@ export function MultiStreamHostPage() {
           ))}
         </div>
       )}
+
+      {/* Step-by-Step Guide - BOTTOM */}
+      <div className="mt-8 mb-6 bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-300 rounded-xl p-5">
+        <div className="flex items-start gap-3">
+          <span className="text-3xl">🎯</span>
+          <div className="flex-1">
+            <h3 className="text-lg font-bold text-gray-900 mb-3">
+              📚 Cách thêm camera vào Parking Lot
+            </h3>
+            <div className="grid md:grid-cols-3 gap-4">
+              {/* Step 1 */}
+              <div className="bg-white rounded-lg p-4 border-2 border-blue-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">1</span>
+                  <span className="font-bold text-gray-800">Chọn Parking Lot</span>
+                </div>
+                <p className="text-xs text-gray-600 mb-2">
+                  Chọn bãi đỗ xe từ dropdown
+                </p>
+                <p className="text-xs text-blue-600">
+                  💡 Chưa có? Tạo tại <a href="/parking-lots" className="underline font-bold">/parking-lots</a>
+                </p>
+              </div>
+
+              {/* Step 2 */}
+              <div className="bg-white rounded-lg p-4 border-2 border-purple-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="bg-purple-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">2</span>
+                  <span className="font-bold text-gray-800">Chọn Camera</span>
+                </div>
+                <p className="text-xs text-gray-600 mb-2">
+                  Chọn ESP32 camera đã lưu từ dropdown
+                </p>
+                <p className="text-xs text-purple-600">
+                  💡 Lưu camera tại <a href="/stream/multi" className="underline font-bold">/stream/multi</a>
+                </p>
+              </div>
+
+              {/* Step 3 */}
+              <div className="bg-white rounded-lg p-4 border-2 border-green-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="bg-green-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">3</span>
+                  <span className="font-bold text-gray-800">Thêm Host</span>
+                </div>
+                <p className="text-xs text-gray-600 mb-2">
+                  Click "➕ Thêm host" → Chọn video → "Bắt đầu phát"
+                </p>
+                <p className="text-xs text-green-600">
+                  ✅ Camera tự động thêm vào parking lot!
+                </p>
+              </div>
+            </div>
+
+            {/* Result */}
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-300 rounded-lg">
+              <p className="text-sm text-gray-800">
+                <strong>🎉 Kết quả:</strong> Camera xuất hiện tại{' '}
+                <a href="/parking-lots" className="text-blue-600 underline font-bold hover:text-blue-800">
+                  /parking-lots
+                </a>
+                {' '}→ Chọn bãi đỗ xe → Xem danh sách cameras! 
+                Xem tất cả tại{' '}
+                <a href="/stream/view-multi" className="text-blue-600 underline font-bold hover:text-blue-800">
+                  /stream/view-multi
+                </a>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Quick Navigation - Bottom */}
       <div className="mt-8 pt-6 border-t border-gray-200">

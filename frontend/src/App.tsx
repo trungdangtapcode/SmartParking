@@ -15,6 +15,7 @@ import { MultiStreamViewerPage } from './pages/MultiStreamViewerPage';
 import { PlateHistoryPage } from './pages/PlateHistoryPage';
 import { ObjectTrackingPage } from './pages/ObjectTrackingPage';
 import { ParkingLotManagementPage } from './pages/ParkingLotManagementPage';
+import { ParkingSpaceEditorPage } from './pages/ParkingSpaceEditorPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
 
@@ -233,6 +234,23 @@ function App() {
                 </NavLink>
               )}
 
+              {/* 11.5. Parking Space Editor */}
+              {user && role === 'admin' && (
+                <NavLink
+                  to="/parking-spaces"
+                  className={({ isActive }) =>
+                    `flex items-center ${sidebarOpen ? 'gap-3 px-4' : 'justify-center px-2'} py-3 rounded-lg font-medium transition-all ${
+                      isActive
+                        ? 'bg-blue-200 text-blue-900 border border-blue-500 shadow-inner'
+                        : 'bg-white text-blue-700 border border-blue-100 hover:bg-blue-50'
+                    }`
+                  }
+                >
+                  <span className="text-xl flex-shrink-0">📐</span>
+                  {sidebarOpen && <span className="truncate">Parking Space Editor</span>}
+                </NavLink>
+              )}
+
               {/* 12. Account */}
               {user && (
                 <NavLink
@@ -400,6 +418,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <ObjectTrackingPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/parking-spaces" 
+            element={
+              <ProtectedRoute roles={['admin']}>
+                <ParkingSpaceEditorPage />
               </ProtectedRoute>
             } 
           />
