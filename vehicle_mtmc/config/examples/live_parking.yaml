@@ -1,0 +1,45 @@
+OUTPUT_DIR: "output/live_parking"
+DEBUG_RUN: false
+FONTSIZE: 11
+MOT:
+  REID_MODEL_OPTS: "models/resnet50_mixstyle/opts.yaml"
+  REID_BATCHSIZE: 16
+  DETECTOR: "yolov8s_car_custom.pt"
+  TRACKER: "bytetrack_iou"
+  TRACKED_CLASSES: [0]
+  MIN_FRAMES: 1
+  SHOW: false
+  VIDEO_OUTPUT: false
+  ONLINE_VIDEO_OUTPUT: false
+  REID_ONNX: "models/resnet50_mixstyle/model.onnx"
+MTMC:
+  CAMERA_LAYOUT: 'config/examples/parking_camera_layout.txt'
+  LINKAGE: 'average'
+  MIN_SIM: 0.5
+EXPRESS:
+  FINAL_VIDEO_OUTPUT: false
+  CAMERAS:
+    - "video": "datasets/parking_a_75sec_8fps.mp4"
+      "name": "cam_a"
+      "detector": "yolov8s"
+      "tracked_classes": [1, 2, 3, 5, 7]
+    - "video": "datasets/parking_b_75sec_8fps.mp4"
+      "name": "cam_b"
+      "detector": "yolov8s_car_custom"
+      "tracked_classes": [0]
+    - "video": "datasets/parking_c_75sec_8fps.mp4"
+      "name": "cam_c"
+      "detector": "yolov8s_car_custom"
+      "tracked_classes": [0]
+LIVE:
+  TARGET_FPS: 8
+  MJPEG_PORT: 8080
+  SIMILARITY_THRESHOLD: 0.5
+  GLOBAL_FEATURE_EMA: 0.0
+  MAX_INACTIVE_SECS: 3.0
+  LOOP_VIDEO: true
+  SLEEP_ON_EMPTY: 0.02
+  MAX_SKEW_TICKS: 1
+  STALL_SECONDS: 5.0
+  MIN_TRACK_FRAMES: 5
+  CLUSTER_INTERVAL: 10.0
