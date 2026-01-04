@@ -40,7 +40,7 @@ parking_worker = None
 # Configuration
 ESP32_URL = os.getenv("ESP32_URL", "http://localhost:5069")
 ENABLE_PARKING_MONITOR = os.getenv("ENABLE_PARKING_MONITOR", "true").lower() == "true"
-MONITOR_CHECK_INTERVAL = int(os.getenv("MONITOR_CHECK_INTERVAL", "5"))
+MONITOR_CHECK_INTERVAL = int(os.getenv("MONITOR_CHECK_INTERVAL", "10"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
