@@ -1,5 +1,7 @@
 <h1 align="center"> Vehicle MTMC Tracking</h1>
 <h3>Baseline code for multi-target (single/multi)-camera object tracking.</h3>
+
+**Models download (Google Drive):** https://drive.google.com/drive/folders/1ELQIlmrxrV3HmLzS3Og53ytRdu5kiscD?usp=sharing
  
 <!-- [![Language grade: Python](https://img.shields.io/lgtm/grade/python/github/regob/vehicle_mtmc)](https://lgtm.com/projects/g/regob/vehicle_mtmc/context:python)
 [![Total
@@ -21,7 +23,7 @@ This repo contains baseline code for
 ## Installation
 
 - Nvidia drivers have to be installed (check with `nvidia-smi`), preferably supporting CUDA >11.0.
-- Tested on python3.7 to 3.10.
+- Tested on 3.10.
 - The `requirements.txt` contains a working configuration with torch `1.13.0`, but installing the packages manually with different versions can work too (older python versions may require older torch versions)
 - A working c++ compiler toolchain, `python-devel` headers and `wheel` are required for installing torch, numpy, and scipy with `pip`. Otherwise the installation will only work with conda.
 
