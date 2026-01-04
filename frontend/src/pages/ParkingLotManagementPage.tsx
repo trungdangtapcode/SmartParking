@@ -194,6 +194,76 @@ export function ParkingLotManagementPage() {
           </p>
         </div>
 
+        {/* Quick Start Guide */}
+        {parkingLots.length === 0 && (
+          <div className="bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-200 rounded-xl p-6 mb-6">
+            <div className="flex items-start gap-4">
+              <div className="text-4xl">🚀</div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-800 mb-2">Hướng dẫn bắt đầu</h3>
+                <ol className="space-y-2 text-sm text-gray-700">
+                  <li className="flex items-start gap-2">
+                    <span className="font-bold text-blue-600">1️⃣</span>
+                    <div>
+                      <strong>Tạo bãi đỗ xe:</strong> Click nút "➕ Tạo mới" để tạo bãi đỗ xe đầu tiên của bạn
+                      <div className="text-xs text-gray-500 mt-1">VD: Parking Lot ID = <code className="bg-white px-1 rounded">PARKING_A</code></div>
+                    </div>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="font-bold text-purple-600">2️⃣</span>
+                    <div>
+                      <strong>Host camera streams:</strong> Đến{' '}
+                      <a href="/stream/host-multi" className="text-blue-600 hover:underline font-semibold">
+                        /stream/host-multi
+                      </a>{' '}
+                      để broadcast video từ các camera
+                      <div className="text-xs text-gray-500 mt-1">
+                        Chọn Parking Lot ID + Camera ID (VD: <code className="bg-white px-1 rounded">CAM1</code>), upload video, click Start Stream
+                      </div>
+                    </div>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="font-bold text-green-600">3️⃣</span>
+                    <div>
+                      <strong>View live streams:</strong> Đến{' '}
+                      <a href="/stream/view-multi" className="text-blue-600 hover:underline font-semibold">
+                        /stream/view-multi
+                      </a>{' '}
+                      để xem tất cả camera của bãi đỗ xe
+                      <div className="text-xs text-gray-500 mt-1">Nhập Parking Lot ID để xem tất cả cameras với detection</div>
+                    </div>
+                  </li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Next Steps for Existing Parking Lots */}
+        {parkingLots.length > 0 && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">✅</span>
+              <div className="flex-1">
+                <div className="font-semibold text-green-800">
+                  Bạn có {parkingLots.length} bãi đỗ xe. Bước tiếp theo:
+                </div>
+                <div className="text-sm text-green-700 mt-1">
+                  📹 Host camera streams tại{' '}
+                  <a href="/stream/host-multi" className="underline font-semibold hover:text-green-900">
+                    /stream/host-multi
+                  </a>
+                  {' '}hoặc{' '}
+                  👁️ Xem live streams tại{' '}
+                  <a href="/stream/view-multi" className="underline font-semibold hover:text-green-900">
+                    /stream/view-multi
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Parking Lots List */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           {/* Left Sidebar - Parking Lots */}
@@ -423,6 +493,39 @@ export function ParkingLotManagementPage() {
             </div>
           </div>
         )}
+
+        {/* Quick Navigation - Bottom */}
+        <div className="mt-8 pt-6 border-t border-gray-200">
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            <div className="px-4 py-2 bg-gradient-to-r from-strawberry-500 to-matcha-500 text-white border-2 border-strawberry-600 rounded-lg shadow-lg flex items-center gap-2 whitespace-nowrap">
+              <span className="text-xl">🏢</span>
+              <div className="text-left">
+                <div className="text-xs opacity-90">Bước 1 (Đang ở đây)</div>
+                <div className="font-bold text-sm">Quản lý Bãi đỗ xe</div>
+              </div>
+            </div>
+            <a
+              href="/stream/host-multi"
+              className="px-4 py-2 bg-white border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:shadow-md transition flex items-center gap-2 whitespace-nowrap"
+            >
+              <span className="text-xl">📹</span>
+              <div className="text-left">
+                <div className="text-xs text-gray-500">Bước 2</div>
+                <div className="font-semibold text-sm">Host Camera Streams</div>
+              </div>
+            </a>
+            <a
+              href="/stream/view-multi"
+              className="px-4 py-2 bg-white border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:shadow-md transition flex items-center gap-2 whitespace-nowrap"
+            >
+              <span className="text-xl">👁️</span>
+              <div className="text-left">
+                <div className="text-xs text-gray-500">Bước 3</div>
+                <div className="font-semibold text-sm">Xem Live Streams</div>
+              </div>
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ import {
   setDefaultESP32,
   type ESP32Config 
 } from '../services/esp32ConfigService';
+import { saveCameraConfig } from '../services/cameraConfigService';
 import type { ParkingLot } from '../types/parkingLot.types';
 
 // ============================================
@@ -590,7 +591,6 @@ export function MultiStreamViewerPage() {
   
   // NEW: Parking and camera config
   const [parkingId, setParkingId] = useState<string>('');
-  const [cameraId, setCameraId] = useState<string>('');
   const [isCheckInCamera, setIsCheckInCamera] = useState<boolean>(false);
   const [parkingLots, setParkingLots] = useState<ParkingLot[]>([]);
   
@@ -743,7 +743,7 @@ export function MultiStreamViewerPage() {
   };
 
   // Handle add tile
-  const handleAddTile = () => {
+  const handleAddTile = async () => {
     if (!selectedSourceId) {
       alert('Vui lòng chọn nguồn stream!');
       return;
@@ -767,6 +767,17 @@ export function MultiStreamViewerPage() {
     const defaultLabel = getDefaultLabel(sourceType, selectedSourceId, customESP32IP.trim());
     const finalLabel = customLabel.trim() || defaultLabel;
 
+    // Auto-generate Camera ID from source
+    let autoCameraId = '';
+    if (sourceType === 'esp32') {
+      // Use ESP32 IP or name as camera ID
+      autoCameraId = customESP32IP.trim() || selectedSourceId;
+    } else if (sourceType === 'video') {
+      // Use video filename as camera ID
+      const video = VIDEO_FILES.find(v => v.id === selectedSourceId);
+      autoCameraId = video?.filename.replace('.mp4', '') || selectedSourceId;
+    }
+
     const newTile: StreamTileConfig = {
       id: `${sourceType}_${selectedSourceId}_${Date.now()}`,
       label: finalLabel,
@@ -774,17 +785,59 @@ export function MultiStreamViewerPage() {
       sourceId: selectedSourceId,
       streamUrl,
       parkingId: parkingId.trim() || undefined,
-      cameraId: cameraId.trim() || undefined,
+      cameraId: autoCameraId || undefined,
       isCheckInCamera: isCheckInCamera,
     };
 
     setTiles((prev) => [...prev, newTile]);
     
+    // Save camera configuration if parking lot is provided
+    if (ownerId && parkingId.trim() && autoCameraId) {
+      console.log('[MultiStreamViewer] 💾 Attempting to save camera config:', {
+        ownerId,
+        parkingLotId: parkingId.trim(),
+        cameraId: autoCameraId,
+        sourceType,
+        selectedSourceId,
+        customESP32IP: customESP32IP.trim()
+      });
+      
+      try {
+        let sourceUrl = '';
+        if (sourceType === 'esp32') {
+          sourceUrl = customESP32IP.trim() || selectedSourceId;
+        } else if (sourceType === 'video') {
+          const video = VIDEO_FILES.find(v => v.id === selectedSourceId);
+          sourceUrl = video?.filename || selectedSourceId;
+        }
+        
+        console.log('[MultiStreamViewer] 📤 Calling saveCameraConfig with sourceUrl:', sourceUrl);
+        
+        await saveCameraConfig({
+          ownerId,
+          parkingLotId: parkingId.trim(),
+          cameraId: autoCameraId,
+          sourceType: sourceType === 'esp32' ? 'esp32' : 'video',
+          sourceUrl,
+          label: finalLabel,
+        });
+        console.log(`[MultiStreamViewer] ✅ Camera config saved successfully: ${parkingId.trim()}/${autoCameraId}`);
+      } catch (error) {
+        console.error('[MultiStreamViewer] ❌ Failed to save camera config:', error);
+        // Don't show error to user, just log it
+      }
+    } else {
+      console.log('[MultiStreamViewer] ⏭️ Skipping camera config save - missing required fields:', {
+        hasOwnerId: !!ownerId,
+        hasParkingId: !!parkingId.trim(),
+        hasAutoCameraId: !!autoCameraId
+      });
+    }
+    
     // Reset form
     setCustomLabel('');
     setCustomESP32IP('');
     setParkingId('');
-    setCameraId('');
     setIsCheckInCamera(false);
   };
 
@@ -829,6 +882,30 @@ export function MultiStreamViewerPage() {
             <span>➕</span>
             <span>Thêm Stream Mới</span>
           </h2>
+
+          {/* CRITICAL WARNING - HOW TO SAVE CAMERAS */}
+          <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-400 rounded-xl shadow-md">
+            <div className="flex items-start gap-3">
+              <span className="text-4xl">💡</span>
+              <div className="flex-1">
+                <h3 className="font-bold text-lg text-blue-900 mb-2">
+                  🎯 Cách lưu camera để sử dụng lại
+                </h3>
+                <div className="space-y-2 text-sm text-blue-800">
+                  <p className="font-semibold">
+                    📝 Để camera được lưu vào Firebase và xuất hiện trong <code className="bg-blue-100 px-2 py-1 rounded">/stream/host-multi</code>:
+                  </p>
+                  <div className="ml-4 space-y-1">
+                    <p>✅ <strong>Chọn Parking Lot ID</strong> từ dropdown bên dưới</p>
+                    <p>✅ <strong>Camera ID sẽ tự động tạo</strong> từ tên nguồn stream (ESP32 IP hoặc tên video)</p>
+                  </div>
+                  <p className="mt-3 p-3 bg-green-100 border border-green-400 rounded">
+                    <strong>🎉 ĐƠN GIẢN:</strong> Chỉ cần chọn Parking Lot → Camera tự động lưu → Sử dụng lại ở /stream/host-multi!
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Source Type Selection */}
           <div className="mb-6">
@@ -1122,45 +1199,74 @@ export function MultiStreamViewerPage() {
           </div>
 
           {/* Parking & Camera Config */}
-          <div className="mb-6 space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-            <label className="block text-sm font-semibold text-blue-900 mb-2">
-              4️⃣ Cấu hình Parking & Camera
-            </label>
+          <div className="mb-6 space-y-4 p-5 bg-gradient-to-br from-blue-50 to-indigo-100 rounded-xl border-2 border-blue-400 shadow-md">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-2xl">�</span>
+              <label className="block text-base font-bold text-blue-900">
+                4️⃣ Chọn Parking Lot (Tùy chọn - để lưu camera)
+              </label>
+            </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-3 bg-blue-50 border-2 border-blue-300 rounded-lg mb-3">
+              <p className="text-sm font-semibold text-blue-900">
+                💡 <strong>Tùy chọn:</strong> Nếu chọn Parking Lot, camera sẽ tự động được lưu vào Firebase để dùng lại sau!
+              </p>
+            </div>
+            
+            <div>
               {/* Parking ID */}
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-bold text-gray-900 mb-2">
                   Parking Lot ID
                 </label>
                 <select
                   value={parkingId}
                   onChange={(e) => setParkingId(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className={`w-full px-3 py-2.5 border-2 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm font-medium ${
+                    parkingId ? 'border-green-400 bg-green-50' : 'border-gray-300 bg-white'
+                  }`}
                 >
-                  <option value="">-- Chọn Parking Lot --</option>
+                  <option value="">-- Không chọn (camera không được lưu) --</option>
                   {parkingLots.map((lot) => (
                     <option key={lot.id} value={lot.id}>
-                      {lot.name} ({lot.id})
+                      ✅ {lot.name} ({lot.id})
                     </option>
                   ))}
                 </select>
-              </div>
-
-              {/* Camera ID */}
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Camera ID
-                </label>
-                <input
-                  type="text"
-                  value={cameraId}
-                  onChange={(e) => setCameraId(e.target.value)}
-                  placeholder="VD: CAM1, CAM2, CAM3"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                />
+                {!parkingId && (
+                  <p className="text-xs text-gray-600 mt-1">
+                    ℹ️ Camera ID sẽ tự động tạo từ tên nguồn stream
+                  </p>
+                )}
+                {parkingId && (
+                  <p className="text-xs text-green-600 mt-1 font-semibold">
+                    ✅ Camera sẽ được lưu vào Parking Lot này!
+                  </p>
+                )}
+                {parkingLots.length === 0 && (
+                  <p className="text-xs text-orange-600 mt-1">
+                    💡 Chưa có parking lot? <a href="/parking-lots" className="underline font-bold">Tạo ở đây</a>
+                  </p>
+                )}
               </div>
             </div>
+
+            {/* Status Indicator */}
+            {parkingId ? (
+              <div className="p-3 bg-green-100 border-2 border-green-500 rounded-lg">
+                <p className="text-sm font-bold text-green-900 flex items-center gap-2">
+                  <span className="text-xl">✅</span>
+                  Camera sẽ được lưu tự động vào <code className="bg-green-200 px-2 py-1 rounded">{parkingId}</code>
+                </p>
+              </div>
+            ) : (
+              <div className="p-3 bg-gray-100 border-2 border-gray-300 rounded-lg">
+                <p className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                  <span className="text-xl">ℹ️</span>
+                  Camera sẽ không được lưu (chỉ xem tạm thời)
+                </p>
+              </div>
+            )}
 
             {/* Check-in Camera Checkbox */}
             <div className="flex items-center gap-2 pt-2">
@@ -1183,18 +1289,38 @@ export function MultiStreamViewerPage() {
           </div>
 
           {/* Add Button */}
-          <div className="flex justify-end">
-            <button
-              onClick={handleAddTile}
-              disabled={!canAdd}
-              className={`px-6 py-3 rounded-lg font-semibold transition-all ${
-                canAdd
-                  ? 'bg-gradient-to-r from-strawberry-500 to-matcha-500 text-white hover:shadow-lg'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              }`}
-            >
-              ➕ Thêm Stream
-            </button>
+          <div className="space-y-3">
+            {/* Info if camera will be saved or not */}
+            {canAdd && !parkingId && (
+              <div className="p-4 bg-blue-100 border-2 border-blue-400 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <span className="text-2xl">ℹ️</span>
+                  <div className="flex-1">
+                    <p className="font-bold text-blue-900 mb-1">
+                      Camera sẽ được thêm vào grid NHƯNG không được lưu
+                    </p>
+                    <p className="text-sm text-blue-800">
+                      Để lưu camera (xuất hiện trong /stream/host-multi), chọn <strong>Parking Lot</strong> ở trên.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex justify-end">
+              <button
+                onClick={handleAddTile}
+                disabled={!canAdd}
+                className={`px-6 py-3 rounded-lg font-semibold transition-all ${
+                  canAdd
+                    ? 'bg-gradient-to-r from-strawberry-500 to-matcha-500 text-white hover:shadow-lg'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}
+                title={!canAdd ? 'Vui lòng chọn nguồn stream' : 'Thêm camera vào grid'}
+              >
+                ➕ Thêm Stream
+              </button>
+            </div>
           </div>
 
           {/* Info Box */}
@@ -1389,6 +1515,39 @@ cd server
             </div>
           </div>
         </details>
+
+        {/* Quick Navigation - Bottom */}
+        <div className="mt-8 pt-6 border-t border-gray-200">
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            <a
+              href="/parking-lots"
+              className="px-4 py-2 bg-white border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:shadow-md transition flex items-center gap-2 whitespace-nowrap"
+            >
+              <span className="text-xl">🏢</span>
+              <div className="text-left">
+                <div className="text-xs text-gray-500">Bước 1</div>
+                <div className="font-semibold text-sm">Quản lý Bãi đỗ xe</div>
+              </div>
+            </a>
+            <a
+              href="/stream/host-multi"
+              className="px-4 py-2 bg-white border-2 border-gray-300 rounded-lg hover:border-blue-500 hover:shadow-md transition flex items-center gap-2 whitespace-nowrap"
+            >
+              <span className="text-xl">📹</span>
+              <div className="text-left">
+                <div className="text-xs text-gray-500">Bước 2</div>
+                <div className="font-semibold text-sm">Host Camera Streams</div>
+              </div>
+            </a>
+            <div className="px-4 py-2 bg-gradient-to-r from-blue-500 to-green-500 text-white border-2 border-blue-600 rounded-lg shadow-lg flex items-center gap-2 whitespace-nowrap">
+              <span className="text-xl">👁️</span>
+              <div className="text-left">
+                <div className="text-xs opacity-90">Bước 3 (Đang ở đây)</div>
+                <div className="font-bold text-sm">Xem Live Streams</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

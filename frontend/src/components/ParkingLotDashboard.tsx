@@ -214,6 +214,59 @@ export function ParkingLotDashboard({ parkingId, showCameras = true, ownerId }: 
               </button>
             ))}
           </div>
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+            💡 <strong>Tip:</strong> Cameras này đang được host tại{' '}
+            <a href="/stream/host-multi" className="underline font-semibold hover:text-blue-900">
+              /stream/host-multi
+            </a>
+            . Xem tất cả live streams tại{' '}
+            <a href="/stream/view-multi" className="underline font-semibold hover:text-blue-900">
+              /stream/view-multi
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* No Cameras Info */}
+      {showCameras && parkingLot.cameras.length === 0 && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6">
+          <div className="flex items-start gap-3">
+            <span className="text-3xl">📹</span>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-2">Chưa có camera nào</h3>
+              <p className="text-sm text-gray-700 mb-3">
+                Bãi đỗ xe này chưa có camera được host. Để thêm camera:
+              </p>
+              <ol className="space-y-2 text-sm text-gray-700">
+                <li className="flex items-start gap-2">
+                  <span className="font-bold text-yellow-700">1.</span>
+                  <div>
+                    Đến{' '}
+                    <a href="/stream/host-multi" className="text-blue-600 hover:underline font-semibold">
+                      /stream/host-multi
+                    </a>
+                  </div>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="font-bold text-yellow-700">2.</span>
+                  <div>
+                    Nhập Parking Lot ID: <code className="bg-yellow-100 px-2 py-0.5 rounded font-mono">{parkingLot.id}</code>
+                  </div>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="font-bold text-yellow-700">3.</span>
+                  <div>
+                    Nhập Camera ID (VD: <code className="bg-yellow-100 px-2 py-0.5 rounded font-mono">CAM1</code>,{' '}
+                    <code className="bg-yellow-100 px-2 py-0.5 rounded font-mono">ENTRANCE</code>)
+                  </div>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="font-bold text-yellow-700">4.</span>
+                  <div>Click "➕ Thêm host", chọn video file, và click "📡 Start Stream"</div>
+                </li>
+              </ol>
+            </div>
+          </div>
         </div>
       )}
 
