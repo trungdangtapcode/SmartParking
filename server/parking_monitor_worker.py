@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from services.firebase_service import FirebaseService
 from services.parking_space_service import ParkingSpaceService
 from services.ai_service import AIService
+from services.detection_logger import detection_logger
 
 # Configure logging
 logging.basicConfig(
@@ -32,7 +33,8 @@ class ParkingMonitorWorker:
         self,
         check_interval: float = 0.1,  # Check every 0.1 seconds (10 FPS)
         detection_url: str = "http://localhost:8069",
-        update_firebase: bool = False  # ❌ Disable slow Firebase writes for high FPS
+        update_firebase: bool = False,  # ❌ Disable slow Firebase writes for high FPS
+        enable_logging: bool = True  # ✅ Enable detection logging to .log files
     ):
         """
         Initialize parking monitor worker
@@ -41,10 +43,12 @@ class ParkingMonitorWorker:
             check_interval: Seconds between checks (default: 0.1 for 10 FPS)
             detection_url: URL of the main FastAPI server
             update_firebase: Whether to update Firebase (slow! disables high FPS)
+            enable_logging: Whether to log detections to .log files
         """
         self.check_interval = check_interval
         self.detection_url = detection_url
         self.update_firebase = update_firebase
+        self.enable_logging = enable_logging
         
         # Initialize services
         self.firebase_service = FirebaseService()
@@ -61,12 +65,74 @@ class ParkingMonitorWorker:
         # Last processed time for each camera (for rate limiting)
         self.last_processed: Dict[str, float] = {}
         self.min_process_interval: float = 0.1  # Minimum 0.1s between processing same camera (10 FPS max)
+        
+        # Track last worker status update time
+        self.last_worker_status_update: float = 0
+        self.worker_status_update_interval: float = 5.0  # Update every 5 seconds
     
     async def load_ai_models(self):
         """Load AI models asynchronously"""
         logger.info("Loading AI models...")
         await self.ai_service.load_models()
         logger.info("✅ AI models loaded")
+    
+    async def update_worker_status(self, camera_ids: List[str]):
+        """
+        Update worker status in Firebase for cameras being processed
+        This lets the UI know which cameras have active workers
+        
+        Args:
+            camera_ids: List of camera IDs being processed by this worker
+        """
+        try:
+            import time
+            current_time = time.time()
+            
+            # Only update every N seconds to avoid excessive Firebase writes
+            if current_time - self.last_worker_status_update < self.worker_status_update_interval:
+                return
+            
+            self.last_worker_status_update = current_time
+            
+            # Update each camera's worker status
+            from datetime import datetime
+            timestamp = datetime.now().isoformat()
+            
+            for camera_id in camera_ids:
+                try:
+                    camera_ref = self.firebase_service.db.collection('esp32_configs').document(camera_id)
+                    camera_ref.update({
+                        'workerActive': True,
+                        'lastWorkerUpdate': timestamp
+                    })
+                    logger.debug(f"✅ Updated worker status for camera {camera_id}")
+                except Exception as e:
+                    logger.error(f"Failed to update worker status for {camera_id}: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error updating worker status: {e}")
+    
+    async def clear_worker_status(self, camera_ids: List[str]):
+        """
+        Clear worker status when worker stops or camera is no longer being processed
+        
+        Args:
+            camera_ids: List of camera IDs to mark as inactive
+        """
+        try:
+            for camera_id in camera_ids:
+                try:
+                    camera_ref = self.firebase_service.db.collection('esp32_configs').document(camera_id)
+                    camera_ref.update({
+                        'workerActive': False,
+                        'lastWorkerUpdate': datetime.now().isoformat()
+                    })
+                    logger.debug(f"🔴 Cleared worker status for camera {camera_id}")
+                except Exception as e:
+                    logger.error(f"Failed to clear worker status for {camera_id}: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error clearing worker status: {e}")
     
     async def get_active_cameras(self) -> List[Dict]:
         """
@@ -234,6 +300,8 @@ class ParkingMonitorWorker:
             
             if not spaces:
                 logger.warning(f"No parking spaces defined for camera {camera_id}")
+                # Send an info message to UI about missing parking spaces
+                await self.broadcast_no_spaces_message(camera_id, camera_info.get('camera_name', camera_id))
                 return
             
             # Fetch frame from camera
@@ -289,6 +357,20 @@ class ParkingMonitorWorker:
                     "timestamp": datetime.now().isoformat()
                 }
             )
+            
+            # Log detection results to file (async, non-blocking)
+            if self.enable_logging:
+                await detection_logger.log_detection(
+                    camera_id=camera_id,
+                    detections=detections,
+                    parking_spaces=spaces,
+                    space_occupancy=space_occupancy,
+                    metadata={
+                        "frame_size": f"{image_width}x{image_height}",
+                        "parking_id": parking_id,
+                        "camera_name": camera_info.get('camera_name', camera_id)
+                    }
+                )
             
             # Update Firebase with occupancy status (SLOW! Only if enabled)
             if self.update_firebase:
@@ -413,12 +495,66 @@ class ParkingMonitorWorker:
         except Exception as e:
             logger.error(f"Error broadcasting frame: {e}")
     
+    async def broadcast_no_spaces_message(self, camera_id: str, camera_name: str):
+        """
+        Broadcast an error message when camera has no parking spaces
+        
+        Args:
+            camera_id: Camera identifier
+            camera_name: Camera display name
+        """
+        import cv2
+        import base64
+        import numpy as np
+        
+        try:
+            # Create a simple error image
+            img = np.zeros((480, 640, 3), dtype=np.uint8)
+            img[:] = (40, 40, 40)  # Dark gray background
+            
+            # Add text
+            text1 = "No Parking Spaces Defined"
+            text2 = f"Camera: {camera_name}"
+            text3 = "Please add parking spaces in the editor"
+            
+            cv2.putText(img, text1, (80, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 2)
+            cv2.putText(img, text2, (120, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1)
+            cv2.putText(img, text3, (60, 300), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1)
+            
+            # Encode to JPEG
+            _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            frame_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+            # Send to FastAPI
+            async with aiohttp.ClientSession() as session:
+                broadcast_url = f'{self.detection_url}/api/broadcast-detection'
+                payload = {
+                    'camera_id': camera_id,
+                    'frame_base64': frame_base64,
+                    'metadata': {
+                        'error': True,
+                        'message': 'No parking spaces defined',
+                        'vehicle_count': 0,
+                        'occupied_spaces': 0,
+                        'total_spaces': 0,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                }
+                
+                async with session.post(broadcast_url, json=payload, timeout=aiohttp.ClientTimeout(total=2)) as response:
+                    if response.status == 200:
+                        logger.debug(f"📺 Sent no-spaces message for camera {camera_id}")
+        
+        except Exception as e:
+            logger.debug(f"Error sending no-spaces message: {e}")
+    
     async def monitor_loop(self):
         """Main monitoring loop"""
         logger.info("🚀 Starting parking monitor worker...")
         logger.info(f"⏱️  Target FPS: {int(1/self.min_process_interval)} FPS per camera")
         
         self.is_running = True
+        currently_processing_cameras: Set[str] = set()
         
         while self.is_running:
             try:
@@ -426,10 +562,20 @@ class ParkingMonitorWorker:
                 active_cameras = await self.get_active_cameras()
                 
                 if not active_cameras:
+                    # Clear status for previously processed cameras
+                    if currently_processing_cameras:
+                        await self.clear_worker_status(list(currently_processing_cameras))
+                        currently_processing_cameras.clear()
+                    
                     logger.warning("No active cameras found. Waiting...")
                     await asyncio.sleep(1.0)  # Wait longer if no cameras
                     continue
-                    
+                
+                # Update worker status in Firebase
+                camera_ids = [cam['camera_id'] for cam in active_cameras]
+                await self.update_worker_status(camera_ids)
+                currently_processing_cameras = set(camera_ids)
+                
                 # Process each camera (rate limiting is handled inside process_camera)
                 tasks = [self.process_camera(camera) for camera in active_cameras]
                 await asyncio.gather(*tasks, return_exceptions=True)
@@ -445,6 +591,11 @@ class ParkingMonitorWorker:
                 logger.error(f"Error in monitor loop: {e}", exc_info=True)
                 # Wait a bit before retrying
                 await asyncio.sleep(1.0)
+        
+        # Clear worker status on shutdown
+        if currently_processing_cameras:
+            logger.info("Clearing worker status for all cameras...")
+            await self.clear_worker_status(list(currently_processing_cameras))
 
     
     async def start(self):
@@ -484,6 +635,8 @@ async def main():
                        help='FastAPI server URL (default: http://localhost:8069)')
     parser.add_argument('--update-firebase', action='store_true', 
                        help='Enable Firebase updates (SLOW! reduces FPS to ~0.3)')
+    parser.add_argument('--no-logging', action='store_true', 
+                       help='Disable detection logging to .log files')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     
     args = parser.parse_args()
@@ -503,7 +656,8 @@ async def main():
     worker = ParkingMonitorWorker(
         check_interval=check_interval,
         detection_url=args.detection_url,
-        update_firebase=args.update_firebase
+        update_firebase=args.update_firebase,
+        enable_logging=not args.no_logging
     )
     
     try:

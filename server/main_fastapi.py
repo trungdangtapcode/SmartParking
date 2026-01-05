@@ -26,7 +26,7 @@ from services.stream_broadcaster import broadcast_manager
 from esp32_client import ESP32Client
 
 # Import routers
-from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams, detection_viewer, worker_detection_stream, worker_broadcast
+from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams, detection_viewer, worker_detection_stream, worker_broadcast, detection_logs
 
 # Global instances
 ai_service = None
@@ -135,6 +135,7 @@ app.include_router(websocket_streams.router)
 app.include_router(detection_viewer.router)
 app.include_router(worker_detection_stream.router)
 app.include_router(worker_broadcast.router)
+app.include_router(detection_logs.router)
 app.include_router(esp32.router)
 app.include_router(ai_detection.router)
 app.include_router(firebase.router)

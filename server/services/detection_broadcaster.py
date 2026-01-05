@@ -73,6 +73,16 @@ class DetectionBroadcaster:
             frame_base64: Base64 encoded JPEG with detection annotations
             metadata: Optional frame metadata (vehicle count, timestamp, etc.)
         """
+        # Quick check without lock - if no viewers, return immediately
+        if camera_id not in self._viewers or not self._viewers[camera_id]:
+            # Still store the frame for MJPEG stream viewers
+            async with self._lock:
+                self._latest_frames[camera_id] = frame_base64.encode('utf-8')
+                if metadata:
+                    self._frame_metadata[camera_id] = metadata
+            logger.info(f"📺 Stored frame for camera {camera_id} (no WebSocket viewers, available for MJPEG)")
+            return  # No WebSocket viewers, skip broadcast
+        
         async with self._lock:
             # Store latest frame
             self._latest_frames[camera_id] = frame_base64.encode('utf-8')
@@ -85,22 +95,36 @@ class DetectionBroadcaster:
         if not viewers:
             return  # No viewers, skip broadcast
         
-        # Broadcast to all viewers
+        # Broadcast to all viewers (with timeout to prevent blocking)
         message = {
             "type": "frame",
             "data": frame_base64,
             "metadata": metadata or {}
         }
         
-        disconnected = []
-        for websocket in viewers:
+        # Send to viewers in parallel with timeout
+        async def send_to_viewer(ws):
             try:
-                await websocket.send_json(message)
+                await asyncio.wait_for(ws.send_json(message), timeout=0.5)
+                return (ws, True)
+            except asyncio.TimeoutError:
+                logger.debug(f"Timeout sending to viewer")
+                return (ws, False)
             except Exception as e:
-                logger.warning(f"Failed to send to viewer: {e}")
-                disconnected.append(websocket)
+                logger.debug(f"Failed to send to viewer: {e}")
+                return (ws, False)
+        
+        # Send to all viewers in parallel
+        results = await asyncio.gather(*[send_to_viewer(ws) for ws in viewers], return_exceptions=True)
         
         # Clean up disconnected viewers
+        disconnected = []
+        for result in results:
+            if isinstance(result, tuple):
+                ws, success = result
+                if not success:
+                    disconnected.append(ws)
+        
         if disconnected:
             async with self._lock:
                 for ws in disconnected:

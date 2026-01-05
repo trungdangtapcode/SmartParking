@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detection Viewer Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #4CAF50;
+        }
+        
+        .info-banner {
+            background: #2c3e50;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        
+        .stream-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .camera-card {
+            background: #2c2c2c;
+            border: 2px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .camera-header {
+            background: #333;
+            padding: 15px;
+            border-bottom: 2px solid #444;
+        }
+        
+        .camera-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .metadata {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .metadata-item {
+            background: rgba(76, 175, 80, 0.2);
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        
+        .metadata-label {
+            font-size: 12px;
+            color: #aaa;
+        }
+        
+        .metadata-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        
+        .stream-wrapper {
+            position: relative;
+            background: #000;
+            aspect-ratio: 16/9;
+        }
+        
+        .stream-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        .connection-status {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .controls {
+            background: #333;
+            padding: 15px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            background: #45a049;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        input {
+            padding: 10px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #2c2c2c;
+            color: white;
+            font-size: 14px;
+        }
+        
+        .log {
+            background: #1a1a1a;
+            border: 1px solid #444;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #4CAF50;
+            padding-left: 10px;
+        }
+        
+        .log-entry.error {
+            border-left-color: #f44336;
+            color: #f44336;
+        }
+        
+        .log-entry.warning {
+            border-left-color: #ff9800;
+            color: #ff9800;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 Detection Viewer Test Page</h1>
+    
+    <div class="info-banner">
+        <strong>💡 How to use:</strong><br>
+        1. Make sure FastAPI server is running on port 8069<br>
+        2. Make sure parking_monitor_worker.py is running<br>
+        3. Enter your camera ID and click "Start Stream"<br>
+        4. Watch real-time detection with bounding boxes!
+    </div>
+    
+    <div class="controls">
+        <input type="text" id="cameraId" placeholder="Enter camera ID (e.g., cam001)" value="cam001">
+        <input type="number" id="fps" placeholder="FPS" value="10" min="1" max="30">
+        <button onclick="startStream()">🎬 Start Stream</button>
+        <button onclick="stopStream()">⏹️ Stop Stream</button>
+        <button onclick="clearLog()">🗑️ Clear Log</button>
+    </div>
+    
+    <div class="stream-container" id="streamContainer">
+        <!-- Streams will be added here -->
+    </div>
+    
+    <div class="log" id="logContainer">
+        <div class="log-entry">Ready to start streaming...</div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8069';
+        let activeStreams = new Map();
+        let activeWebSockets = new Map();
+        
+        function log(message, type = 'info') {
+            const logContainer = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+        
+        function clearLog() {
+            document.getElementById('logContainer').innerHTML = '';
+            log('Log cleared');
+        }
+        
+        function startStream() {
+            const cameraId = document.getElementById('cameraId').value;
+            const fps = document.getElementById('fps').value;
+            
+            if (!cameraId) {
+                log('Please enter a camera ID', 'error');
+                return;
+            }
+            
+            if (activeStreams.has(cameraId)) {
+                log(`Stream already active for ${cameraId}`, 'warning');
+                return;
+            }
+            
+            log(`Starting stream for camera: ${cameraId} at ${fps} FPS`);
+            
+            // Create stream card
+            const streamContainer = document.getElementById('streamContainer');
+            const card = document.createElement('div');
+            card.className = 'camera-card';
+            card.id = `stream-${cameraId}`;
+            
+            card.innerHTML = `
+                <div class="camera-header">
+                    <div class="camera-title">
+                        <h3>📹 ${cameraId}</h3>
+                        <div class="status-indicator"></div>
+                    </div>
+                    <div class="metadata">
+                        <div class="metadata-item">
+                            <div class="metadata-label">Vehicles</div>
+                            <div class="metadata-value" id="vehicles-${cameraId}">-</div>
+                        </div>
+                        <div class="metadata-item">
+                            <div class="metadata-label">Occupied</div>
+                            <div class="metadata-value" id="occupied-${cameraId}">-</div>
+                        </div>
+                        <div class="metadata-item">
+                            <div class="metadata-label">Available</div>
+                            <div class="metadata-value" id="available-${cameraId}">-</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="stream-wrapper">
+                    <img id="img-${cameraId}" alt="Detection Stream">
+                    <div class="connection-status" id="status-${cameraId}">Connecting...</div>
+                </div>
+            `;
+            
+            streamContainer.appendChild(card);
+            
+            // Start MJPEG stream
+            const streamUrl = `${API_BASE}/stream/worker-detection?camera_id=${cameraId}&fps=${fps}`;
+            const img = document.getElementById(`img-${cameraId}`);
+            img.src = streamUrl;
+            
+            img.onload = () => {
+                document.getElementById(`status-${cameraId}`).textContent = '🟢 Connected';
+                log(`✅ Stream connected for ${cameraId}`);
+            };
+            
+            img.onerror = () => {
+                document.getElementById(`status-${cameraId}`).textContent = '🔴 Error';
+                log(`❌ Stream error for ${cameraId}`, 'error');
+            };
+            
+            // Connect WebSocket for metadata
+            const wsUrl = `${API_BASE.replace('http', 'ws')}/ws/viewer/detection?camera_id=${cameraId}`;
+            const ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                log(`✅ WebSocket connected for ${cameraId}`);
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'frame' && data.metadata) {
+                        const meta = data.metadata;
+                        document.getElementById(`vehicles-${cameraId}`).textContent = meta.vehicle_count;
+                        document.getElementById(`occupied-${cameraId}`).textContent = meta.occupied_spaces;
+                        document.getElementById(`available-${cameraId}`).textContent = 
+                            meta.total_spaces - meta.occupied_spaces;
+                    } else if (data.type === 'info') {
+                        log(`ℹ️ ${data.message}`);
+                    } else if (data.type === 'error') {
+                        log(`❌ ${data.message}`, 'error');
+                    }
+                } catch (e) {
+                    log(`Error parsing WebSocket message: ${e}`, 'error');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                log(`❌ WebSocket error for ${cameraId}`, 'error');
+            };
+            
+            ws.onclose = () => {
+                log(`🔌 WebSocket closed for ${cameraId}`);
+            };
+            
+            activeStreams.set(cameraId, img);
+            activeWebSockets.set(cameraId, ws);
+        }
+        
+        function stopStream() {
+            const cameraId = document.getElementById('cameraId').value;
+            
+            if (!cameraId) {
+                log('Please enter a camera ID', 'error');
+                return;
+            }
+            
+            if (!activeStreams.has(cameraId)) {
+                log(`No active stream for ${cameraId}`, 'warning');
+                return;
+            }
+            
+            // Close WebSocket
+            const ws = activeWebSockets.get(cameraId);
+            if (ws) {
+                ws.close();
+                activeWebSockets.delete(cameraId);
+            }
+            
+            // Remove stream card
+            const card = document.getElementById(`stream-${cameraId}`);
+            if (card) {
+                card.remove();
+            }
+            
+            activeStreams.delete(cameraId);
+            log(`⏹️ Stream stopped for ${cameraId}`);
+        }
+        
+        // Auto-start with default camera if available
+        window.addEventListener('load', () => {
+            log('Page loaded. Ready to stream!');
+            log('📋 Make sure worker is running with: python parking_monitor_worker.py --fps 10');
+        });
+    </script>
+</body>
+</html>
