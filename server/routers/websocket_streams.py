@@ -156,6 +156,7 @@ async def ws_raw_stream(
 async def ws_detection_stream(
     websocket: WebSocket,
     user_id: Optional[str] = None,
+    camera_url: Optional[str] = None,
     conf: float = 0.25,
     show_labels: bool = True,
     fps: int = 10,
@@ -166,6 +167,7 @@ async def ws_detection_stream(
     
     Query params:
         user_id: Optional Firebase user ID
+        camera_url: Optional direct camera URL (e.g., http://192.168.1.100)
         conf: Confidence threshold (default 0.25)
         show_labels: Show detection labels (default true)
         fps: Target FPS (1-30, default 10)
@@ -177,7 +179,7 @@ async def ws_detection_stream(
         {"type": "error", "message": "..."}
     
     Usage (frontend):
-        const ws = new WebSocket('ws://localhost:8069/ws/stream/detect?conf=0.3&fps=15');
+        const ws = new WebSocket('ws://localhost:8069/ws/stream/detect?conf=0.3&fps=15&camera_url=http://192.168.1.100');
         ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
             if (msg.type === 'frame') {
@@ -190,9 +192,14 @@ async def ws_detection_stream(
     await websocket.accept()
     stream_id = str(uuid.uuid4())[:8]
     
-    # Determine ESP32 URL
+    # Determine ESP32 URL (priority: camera_url param > user config > default)
     stream_source_url = ESP32_URL
-    if user_id and firebase_service:
+    
+    if camera_url:
+        # Direct camera URL parameter takes priority
+        stream_source_url = camera_url
+        print(f"📹 [{stream_id}] Using provided camera URL: {stream_source_url}")
+    elif user_id and firebase_service:
         try:
             config = await firebase_service.get_user_esp32_config(user_id)
             if config and config.get("esp32_url"):
@@ -200,6 +207,14 @@ async def ws_detection_stream(
                 print(f"📹 [{stream_id}] Using user's ESP32 for detection: {stream_source_url}")
         except Exception as e:
             print(f"⚠️  [{stream_id}] Could not get user ESP32 config: {e}")
+    
+    if not stream_source_url:
+        await websocket.send_json({
+            "type": "error",
+            "message": "No camera URL provided. Use camera_url parameter or provide user_id with configured camera."
+        })
+        await websocket.close()
+        return
     
     stream_url = f"{stream_source_url}/stream"
     print(f"🔌 [{stream_id}] WebSocket detection stream connected: {stream_url} | FPS:{fps} | Skip:{skip_frames}")

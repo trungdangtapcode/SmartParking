@@ -17,6 +17,7 @@ import { ObjectTrackingPage } from './pages/ObjectTrackingPage';
 import { ParkingLotManagementPage } from './pages/ParkingLotManagementPage';
 import { ParkingSpaceEditorPage } from './pages/ParkingSpaceEditorPage';
 import { WorkerMonitorPage } from './pages/WorkerMonitorPage';
+import DetectionViewerPage from './pages/DetectionViewerPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
 
@@ -269,6 +270,23 @@ function App() {
                 </NavLink>
               )}
 
+              {/* 11.7. Detection Viewer */}
+              {user && (
+                <NavLink
+                  to="/detection-viewer"
+                  className={({ isActive }) =>
+                    `flex items-center ${sidebarOpen ? 'gap-3 px-4' : 'justify-center px-2'} py-3 rounded-lg font-medium transition-all ${
+                      isActive
+                        ? 'bg-blue-200 text-blue-900 border border-blue-500 shadow-inner'
+                        : 'bg-white text-blue-700 border border-blue-100 hover:bg-blue-50'
+                    }`
+                  }
+                >
+                  <span className="text-xl flex-shrink-0">📺</span>
+                  {sidebarOpen && <span className="truncate">Live Detection</span>}
+                </NavLink>
+              )}
+
               {/* 12. Account */}
               {user && (
                 <NavLink
@@ -460,6 +478,14 @@ function App() {
             element={
               <ProtectedRoute roles={['admin']}>
                 <WorkerMonitorPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/detection-viewer" 
+            element={
+              <ProtectedRoute>
+                <DetectionViewerPage />
               </ProtectedRoute>
             } 
           />

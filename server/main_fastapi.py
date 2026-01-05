@@ -26,7 +26,7 @@ from services.stream_broadcaster import broadcast_manager
 from esp32_client import ESP32Client
 
 # Import routers
-from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams
+from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams, detection_viewer
 
 # Import worker
 from parking_monitor_worker import ParkingMonitorWorker
@@ -145,6 +145,7 @@ app.include_router(health.router)
 app.include_router(user_config.router)
 app.include_router(streams.router)
 app.include_router(websocket_streams.router)
+app.include_router(detection_viewer.router)
 app.include_router(esp32.router)
 app.include_router(ai_detection.router)
 app.include_router(firebase.router)

@@ -46,6 +46,11 @@ export function WorkerMonitorPage() {
   const [refreshInterval, setRefreshInterval] = useState(5); // seconds
   const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARNING' | 'ERROR'>('ALL');
   
+  // Live detection stream states
+  const [showDetectionStream, setShowDetectionStream] = useState(false);
+  const [streamingCameraId, setStreamingCameraId] = useState<string | null>(null);
+  const [streamUrl, setStreamUrl] = useState<string>('');
+  
   // Refs
   const logsEndRef = useRef<HTMLDivElement>(null);
   const refreshTimerRef = useRef<number | null>(null);
@@ -113,6 +118,20 @@ export function WorkerMonitorPage() {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [logs]);
+
+  // Handle ESC key to close stream modal
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && showDetectionStream) {
+        handleCloseDetectionStream();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showDetectionStream]);
 
   // Generate mock logs (replace with real backend API)
   const generateMockLogs = (camsData: ESP32Config[]) => {
@@ -280,6 +299,57 @@ export function WorkerMonitorPage() {
     link.download = `worker-logs-${new Date().toISOString()}.json`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Open live detection stream
+  const handleViewDetectionStream = (cameraId: string) => {
+    const camera = cameras.find(c => c.id === cameraId);
+    if (!camera || !camera.workerEnabled) {
+      alert('Worker must be enabled to view detection stream');
+      return;
+    }
+
+    // Encode camera URL for query parameter
+    const encodedCameraUrl = encodeURIComponent(camera.ipAddress);
+    
+    // Create HTTP stream URL with detection
+    const url = `http://localhost:8069/stream/detect?camera_url=${encodedCameraUrl}&conf=0.25&fps=10&skip_frames=2`;
+    
+    setStreamUrl(url);
+    setStreamingCameraId(cameraId);
+    setShowDetectionStream(true);
+
+    addNewLog({
+      timestamp: new Date().toISOString(),
+      level: 'INFO',
+      cameraId: camera.id,
+      cameraName: camera.name,
+      message: '📹 Live detection stream opened',
+    });
+  };
+
+  // Close detection stream
+  const handleCloseDetectionStream = () => {
+    const camera = cameras.find(c => c.id === streamingCameraId);
+    
+    if (camera) {
+      addNewLog({
+        timestamp: new Date().toISOString(),
+        level: 'INFO',
+        cameraId: camera.id,
+        cameraName: camera.name,
+        message: '📴 Live detection stream closed',
+      });
+    }
+    
+    setShowDetectionStream(false);
+    setStreamingCameraId(null);
+    setStreamUrl('');
+  };
+
+  // Helper to add a single log
+  const addNewLog = (log: WorkerLog) => {
+    setLogs(prev => [...prev, log].slice(-500));
   };
 
   // Filter logs
@@ -454,19 +524,33 @@ export function WorkerMonitorPage() {
                           <p className="text-xs text-gray-600">{camera.ipAddress}</p>
                         </div>
                         
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleWorker(camera.id, !camera.workerEnabled);
-                          }}
-                          className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                            camera.workerEnabled
-                              ? 'bg-green-500 text-white hover:bg-green-600'
-                              : 'bg-gray-400 text-white hover:bg-gray-500'
-                          }`}
-                        >
-                          {camera.workerEnabled ? 'ON' : 'OFF'}
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleWorker(camera.id, !camera.workerEnabled);
+                            }}
+                            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                              camera.workerEnabled
+                                ? 'bg-green-500 text-white hover:bg-green-600'
+                                : 'bg-gray-400 text-white hover:bg-gray-500'
+                            }`}
+                          >
+                            {camera.workerEnabled ? 'ON' : 'OFF'}
+                          </button>
+
+                          {camera.workerEnabled && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleViewDetectionStream(camera.id);
+                              }}
+                              className="px-3 py-1 rounded-lg text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                            >
+                              📹 View Live
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* Status Details */}
@@ -626,6 +710,56 @@ export function WorkerMonitorPage() {
           </div>
         </div>
       </div>
+
+      {/* Live Detection Stream Modal */}
+      {showDetectionStream && streamingCameraId && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <h3 className="text-xl font-bold text-gray-800">
+                📹 Live Detection Stream - {cameras.find(c => c.id === streamingCameraId)?.name}
+              </h3>
+              <button
+                onClick={handleCloseDetectionStream}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                ❌ Close
+              </button>
+            </div>
+
+            {/* Stream Container */}
+            <div className="flex-1 flex items-center justify-center p-4 bg-gray-900 overflow-auto">
+              <img
+                src={streamUrl}
+                alt="Live Detection Stream"
+                className="max-w-full max-h-full border-2 border-blue-500"
+                onError={(e) => {
+                  console.error('Stream error:', e);
+                  const camera = cameras.find(c => c.id === streamingCameraId);
+                  if (camera) {
+                    addNewLog({
+                      timestamp: new Date().toISOString(),
+                      level: 'ERROR',
+                      cameraId: camera.id,
+                      cameraName: camera.name,
+                      message: '❌ Failed to load detection stream',
+                    });
+                  }
+                }}
+              />
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-gray-200 bg-gray-50">
+              <div className="flex items-center justify-between text-sm text-gray-600">
+                <span>🔴 Live streaming from worker detection</span>
+                <span>Press ESC or click Close to stop</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
