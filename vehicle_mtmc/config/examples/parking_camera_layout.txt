@@ -1,0 +1,38 @@
+## matrices for describing the multi-camera layout for parking lot
+
+# fps is the frame rate of each camera (parking_a, parking_b, parking_c)
+
+# offsets denote the time difference between cameras
+# assuming all videos are synchronized (adjust if needed)
+
+# The (i,j)-th element of the compatibility matrix shows whether a track from
+# the j-th camera can be appended to one in the i-th camera.
+
+# The (i,j)-th element of dtmin and dtmax denotes the timeframe for matching.
+# If the track left camera i at t, it has to appear on j 
+# in the interval [t - dtmin, t + dtmax]
+# infinity is denoted by -inf or inf.
+
+fps
+30.0 30.0 30.0
+
+offset
+0.0 0.0 0.0
+
+scales
+1.0 1.0 1.0
+
+compatibility
+0 1 1
+1 0 1
+1 1 0
+
+dtmin
+0 -10 -10
+-10 0 -10
+-10 -10 0
+
+dtmax
+0 10 10
+10 0 10
+10 10 0
