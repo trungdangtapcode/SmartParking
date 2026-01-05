@@ -77,9 +77,6 @@ export function WorkerMonitorPage() {
           status: 'unknown',
         }));
         setWorkerStatuses(statuses);
-        
-        // Generate mock logs for demo (in production, fetch from backend)
-        generateMockLogs(camsData);
       } catch (error) {
         console.error('Failed to load data:', error);
       } finally {
@@ -90,7 +87,7 @@ export function WorkerMonitorPage() {
     loadData();
   }, [user, isAdmin]);
 
-  // Auto-refresh
+  // Auto-refresh worker status only (no mock logs)
   useEffect(() => {
     if (!autoRefresh) {
       if (refreshTimerRef.current) {
@@ -102,7 +99,6 @@ export function WorkerMonitorPage() {
 
     refreshTimerRef.current = setInterval(() => {
       refreshWorkerStatus();
-      addNewLogs();
     }, refreshInterval * 1000);
 
     return () => {
@@ -133,119 +129,10 @@ export function WorkerMonitorPage() {
     };
   }, [showDetectionStream]);
 
-  // Generate mock logs (replace with real backend API)
-  const generateMockLogs = (camsData: ESP32Config[]) => {
-    const mockLogs: WorkerLog[] = [];
-    const now = new Date();
-    
-    camsData.forEach((cam) => {
-      if (cam.workerEnabled) {
-        // Add some historical logs
-        for (let i = 5; i >= 0; i--) {
-          const timestamp = new Date(now.getTime() - i * 5000);
-          mockLogs.push({
-            timestamp: timestamp.toISOString(),
-            level: 'INFO',
-            cameraId: cam.id,
-            cameraName: cam.name,
-            message: `✅ Processing camera: ${cam.ipAddress}`,
-          });
-          
-          if (i % 2 === 0) {
-            mockLogs.push({
-              timestamp: new Date(timestamp.getTime() + 1000).toISOString(),
-              level: 'DEBUG',
-              cameraId: cam.id,
-              cameraName: cam.name,
-              message: `Fetched frame: 640x480, 48531 bytes`,
-            });
-          }
-          
-          mockLogs.push({
-            timestamp: new Date(timestamp.getTime() + 2000).toISOString(),
-            level: 'INFO',
-            cameraId: cam.id,
-            cameraName: cam.name,
-            message: `Detected ${Math.floor(Math.random() * 3)} vehicles, updated ${Math.floor(Math.random() * 5)} spaces`,
-          });
-        }
-      }
-    });
-    
-    setLogs(mockLogs.sort((a, b) => 
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    ));
-  };
-
-  // Add new logs (simulate real-time)
-  const addNewLogs = () => {
-    const enabledCameras = cameras.filter(cam => cam.workerEnabled);
-    if (enabledCameras.length === 0) return;
-
-    const newLogs: WorkerLog[] = [];
-    enabledCameras.forEach(cam => {
-      const timestamp = new Date().toISOString();
-      
-      // Random log generation
-      const rand = Math.random();
-      if (rand > 0.7) {
-        newLogs.push({
-          timestamp,
-          level: 'INFO',
-          cameraId: cam.id,
-          cameraName: cam.name,
-          message: `✅ Updated occupancy: ${Math.floor(Math.random() * 5)}/${Math.floor(Math.random() * 10) + 5} occupied`,
-        });
-      } else if (rand > 0.5) {
-        newLogs.push({
-          timestamp,
-          level: 'DEBUG',
-          cameraId: cam.id,
-          cameraName: cam.name,
-          message: `Fetched ${Math.floor(Math.random() * 50000) + 40000} bytes from camera`,
-        });
-      } else if (rand < 0.1) {
-        newLogs.push({
-          timestamp,
-          level: 'WARNING',
-          cameraId: cam.id,
-          cameraName: cam.name,
-          message: `⚠️ No vehicles detected in current frame`,
-        });
-      }
-    });
-
-    if (newLogs.length > 0) {
-      setLogs(prev => [...prev, ...newLogs].slice(-500)); // Keep last 500 logs
-    }
-  };
-
-  // Refresh worker status (simulate API call)
+  // Refresh worker status (no longer simulated - cameras show actual Firebase state)
   const refreshWorkerStatus = () => {
-    setWorkerStatuses(prev => prev.map(status => {
-      if (!status.enabled) {
-        return { ...status, status: 'idle' };
-      }
-
-      // Simulate random status
-      const rand = Math.random();
-      if (rand > 0.9) {
-        return {
-          ...status,
-          status: 'error',
-          errorMessage: 'Failed to fetch frame from camera',
-          lastCheck: new Date().toISOString(),
-        };
-      }
-
-      return {
-        ...status,
-        status: 'running',
-        lastCheck: new Date().toISOString(),
-        spacesCount: Math.floor(Math.random() * 10) + 5,
-        occupiedCount: Math.floor(Math.random() * 5),
-      };
-    }));
+    // Worker status is already reflected in the cameras state from Firebase
+    // No need to simulate - just reload cameras if needed
   };
 
   // Toggle worker for camera
@@ -590,7 +477,8 @@ export function WorkerMonitorPage() {
             </div>
           </div>
 
-          {/* Right Column: Logs */}
+          {/* Right Column: Logs - Hidden until backend API is implemented */}
+          {false && (
           <div className="lg:col-span-2">
             <div className="bg-white rounded-xl shadow-lg border-2 border-yellow-200">
               {/* Logs Header */}
@@ -708,6 +596,7 @@ export function WorkerMonitorPage() {
               </div>
             </div>
           </div>
+          )}
         </div>
       </div>
 

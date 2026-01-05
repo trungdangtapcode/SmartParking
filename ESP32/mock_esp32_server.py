@@ -7,11 +7,18 @@ Features:
 - Single frame capture (/capture)
 - Video looping (simulates continuous camera feed)
 - Frame index overlay for debugging (set SHOW_FRAME_ID constant)
+- TIME-SYNCED MODE: All cameras show frames based on real-world time
+
+Time Synchronization:
+- Videos are assumed to start at Unix epoch 0 (1970-01-01 00:00:00)
+- Current frame = (current_time_seconds % video_duration_seconds) * fps
+- Multiple cameras starting at different times will show the SAME moment
+- Example: Camera A starts at 10:00:00, Camera B at 10:00:10 → both show frames from same scene time
 
 Debug Mode:
 - Set SHOW_FRAME_ID = True to show frame numbers on video
 - Helps verify stream synchronization and frame skipping
-- Green overlay shows "Frame: X" on each frame
+- Green overlay shows "Frame: X (Time: HH:MM:SS)" on each frame
 """
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +29,8 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 import base64
+import time
+from datetime import datetime
 
 app = FastAPI(
     title="Mock ESP32-CAM Server",
@@ -52,14 +61,62 @@ SHOW_FRAME_ID = True  # Set to False to disable frame index overlay
 # Global video capture (to simulate persistent camera)
 current_video_path: Optional[Path] = None
 video_capture: Optional[cv2.VideoCapture] = None
+video_total_frames: int = 0
+video_fps: float = DEFAULT_FPS
+video_duration: float = 0.0
 
-# 🔥 GLOBAL FRAME COUNTER (shared across all connections)
-global_frame_idx = 0
-frame_lock = asyncio.Lock()  # Thread-safe counter
+# 🕐 TIME-BASED SYNCHRONIZATION
+# Videos are assumed to start at Unix epoch 0 (1970-01-01 00:00:00)
+EPOCH_START = 0  # Unix timestamp 0
+frame_lock = asyncio.Lock()  # Thread-safe access
+
+
+def get_time_synced_frame_index(total_frames: int, fps: float) -> tuple[int, float]:
+    """
+    Calculate which frame to show based on current real-world time.
+    
+    Assumes video started at Unix epoch 0 (1970-01-01 00:00:00).
+    All cameras will show the same frame at the same real-world time.
+    
+    Args:
+        total_frames: Total number of frames in the video
+        fps: Video frames per second
+        
+    Returns:
+        Tuple of (frame_index, elapsed_time_seconds)
+        - frame_index: Frame index to display (0-based)
+        - elapsed_time_seconds: Current time position in the synchronized timeline
+    """
+    current_time = time.time()  # Current Unix timestamp
+    video_duration = total_frames / fps  # Total video duration in seconds
+    
+    # Calculate elapsed time since epoch, modulo video duration (loop video)
+    elapsed_time = current_time % video_duration
+    
+    # Calculate frame index
+    frame_idx = int(elapsed_time * fps) % total_frames
+    
+    return frame_idx, elapsed_time
+
+
+def format_time_from_frame(frame_idx: int, fps: float) -> str:
+    """Format frame index as HH:MM:SS.mmm"""
+    seconds = frame_idx / fps
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
+
+def format_time_from_seconds(seconds: float) -> str:
+    """Format seconds as HH:MM:SS.mmm"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
 def get_or_create_capture(video_filename: str = None) -> cv2.VideoCapture:
     """Get or create video capture (simulates ESP32 camera)"""
-    global current_video_path, video_capture
+    global current_video_path, video_capture, video_total_frames, video_fps, video_duration
     
     if video_filename:
         video_path = STREAM_FOLDER / video_filename
@@ -86,6 +143,18 @@ def get_or_create_capture(video_filename: str = None) -> cv2.VideoCapture:
         raise HTTPException(500, f"Cannot open video: {video_path.name}")
     
     current_video_path = video_path
+    
+    # Get video properties for time-based synchronization
+    video_total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_fps = video_capture.get(cv2.CAP_PROP_FPS) or DEFAULT_FPS
+    video_duration = video_total_frames / video_fps
+    
+    print(f"📹 [Mock ESP32] Video loaded: {video_path.name}")
+    print(f"   ├─ Total frames: {video_total_frames}")
+    print(f"   ├─ FPS: {video_fps:.2f}")
+    print(f"   ├─ Duration: {video_duration:.2f}s ({format_time_from_frame(video_total_frames, video_fps)})")
+    print(f"   └─ Time-sync: ENABLED (synced to Unix epoch)")
+    
     return video_capture
 
 # ========== ESP32-CAM Endpoints ==========
@@ -112,14 +181,18 @@ async def stream_video(
 ):
     """
     MJPEG stream endpoint - mimics ESP32-CAM /stream
-    🔥 BROADCAST MODE: All clients see the SAME frame ID (global counter)
+    � TIME-SYNCED MODE: All clients see frames based on real-world time
+    
+    Videos are assumed to start at Unix epoch 0 (1970-01-01 00:00:00).
+    Frame index = (current_time % video_duration) * fps
+    
+    This ensures multiple cameras show the SAME moment regardless of when they start.
     
     Usage:
     - http://localhost:8081/stream (default video)
     - http://localhost:8081/stream?video=parking_a.mp4
     - http://localhost:8081/stream?video=parking_a.mp4&fps=20
     """
-    global global_frame_idx
     
     # Parse resolution
     try:
@@ -129,47 +202,63 @@ async def stream_video(
         target_resolution = DEFAULT_RESOLUTION
     
     async def generate_mjpeg_stream():
-        """Generate MJPEG stream like ESP32-CAM"""
-        global global_frame_idx
+        """Generate MJPEG stream like ESP32-CAM with time synchronization"""
         
         try:
             cap = get_or_create_capture(video)
             delay = 1.0 / fps
             
-            print(f"📹 [Mock ESP32] Streaming: {current_video_path.name} @ {fps}fps (Global Frame: {global_frame_idx})")
+            # Get video properties
+            total_frames = video_total_frames
+            video_fps_rate = video_fps
+            
+            print(f"📹 [Mock ESP32] Streaming: {current_video_path.name} @ {fps}fps")
+            print(f"🕐 [Mock ESP32] Time-sync mode: ACTIVE (synced to Unix epoch)")
             if SHOW_FRAME_ID:
-                print(f"🔍 [Mock ESP32] Frame ID overlay: ENABLED (GLOBAL MODE)")
+                print(f"🔍 [Mock ESP32] Frame ID overlay: ENABLED")
             
             while True:
+                # 🕐 Calculate time-synced frame index and elapsed time
+                target_frame_idx, elapsed_time = get_time_synced_frame_index(total_frames, video_fps_rate)
+                
+                # Seek to the calculated frame
+                cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame_idx)
+                
                 ret, frame = cap.read()
                 
-                # Loop video when it ends
+                # Fallback: if seeking fails, loop from start
                 if not ret:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    # 🔥 DON'T reset global counter - it keeps incrementing!
-                    continue
-                
-                # 🔥 Increment GLOBAL frame counter (shared across all connections)
-                async with frame_lock:
-                    global_frame_idx += 1
-                    current_frame_idx = global_frame_idx
+                    ret, frame = cap.read()
+                    if not ret:
+                        continue
                 
                 # Resize to target resolution
                 frame = cv2.resize(frame, target_resolution)
                 
-                # � DEBUG: Add GLOBAL frame index overlay
+                # 🔍 DEBUG: Add time-synced frame index overlay
                 if SHOW_FRAME_ID:
                     # Add semi-transparent background for better readability
                     overlay = frame.copy()
-                    cv2.rectangle(overlay, (5, 5), (200, 50), (0, 0, 0), -1)
+                    cv2.rectangle(overlay, (5, 5), (280, 80), (0, 0, 0), -1)
                     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
                     
-                    # Add GLOBAL frame index text
-                    cv2.putText(frame, f"Frame: {current_frame_idx}", 
-                                (10, 35), 
+                    # Add frame index text
+                    cv2.putText(frame, f"Frame: {target_frame_idx}", 
+                                (10, 30), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 
-                                0.8, 
+                                0.6, 
                                 (0, 255, 0),  # Green color
+                                2, 
+                                cv2.LINE_AA)
+                    
+                    # Add SYNCHRONIZED time (same across all cameras)
+                    time_str = format_time_from_seconds(elapsed_time)
+                    cv2.putText(frame, f"Time: {time_str}", 
+                                (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 
+                                0.6, 
+                                (0, 255, 255),  # Yellow color
                                 2, 
                                 cv2.LINE_AA)
                 
@@ -211,7 +300,7 @@ async def capture_frame(
 ):
     """
     Capture single frame - mimics ESP32-CAM /capture
-    🔥 Shows GLOBAL frame ID (same as streaming)
+    � Shows TIME-SYNCED frame (based on real-world time)
     Returns a JPEG image
     
     Usage:
@@ -219,10 +308,15 @@ async def capture_frame(
     - http://localhost:8081/capture?video=parking_a.mp4&quality=90
     - http://localhost:8081/capture?show_frame_id=false
     """
-    global global_frame_idx
     
     try:
         cap = get_or_create_capture(video)
+        
+        # 🕐 Calculate time-synced frame index and elapsed time
+        target_frame_idx, elapsed_time = get_time_synced_frame_index(video_total_frames, video_fps)
+        
+        # Seek to the calculated frame
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame_idx)
         
         ret, frame = cap.read()
         if not ret:
@@ -236,19 +330,29 @@ async def capture_frame(
         # Resize to ESP32-CAM resolution
         frame = cv2.resize(frame, DEFAULT_RESOLUTION)
         
-        # 🔍 DEBUG: Add GLOBAL frame index overlay
+        # 🔍 DEBUG: Add time-synced frame index overlay
         if show_frame_id:
             # Add semi-transparent background
             overlay = frame.copy()
-            cv2.rectangle(overlay, (5, 5), (200, 50), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (5, 5), (280, 80), (0, 0, 0), -1)
             cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
             
-            # Add GLOBAL frame index text
-            cv2.putText(frame, f"Frame: {global_frame_idx}", 
-                        (10, 35), 
+            # Add frame index text
+            cv2.putText(frame, f"Frame: {target_frame_idx}", 
+                        (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 
-                        0.8, 
+                        0.6, 
                         (0, 255, 0),
+                        2, 
+                        cv2.LINE_AA)
+            
+            # Add SYNCHRONIZED time (same across all cameras)
+            time_str = format_time_from_seconds(elapsed_time)
+            cv2.putText(frame, f"Time: {time_str}", 
+                        (10, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.6, 
+                        (0, 255, 255),
                         2, 
                         cv2.LINE_AA)
         
@@ -278,19 +382,33 @@ async def capture_frame(
 @app.get("/status")
 async def get_status():
     """Get camera status - mimics ESP32-CAM /status"""
-    global video_capture, current_video_path, global_frame_idx
+    global video_capture, current_video_path
     
     is_streaming = video_capture is not None and video_capture.isOpened()
     
-    return {
+    status_data = {
         "device": "ESP32-CAM Mock",
         "status": "streaming" if is_streaming else "idle",
         "current_video": current_video_path.name if current_video_path else None,
         "resolution": f"{DEFAULT_RESOLUTION[0]}x{DEFAULT_RESOLUTION[1]}",
         "available_videos": [f.name for f in STREAM_FOLDER.glob("*.mp4")] if STREAM_FOLDER.exists() else [],
-        "global_frame_id": global_frame_idx,  # 🔥 NEW: Show current global frame
-        "broadcast_mode": True  # 🔥 NEW: Indicate broadcast mode is active
+        "time_sync_mode": True,  # 🕐 Time-based synchronization enabled
+        "epoch_start": EPOCH_START,
+        "current_unix_time": time.time(),
     }
+    
+    # Add video info if streaming
+    if is_streaming:
+        current_frame = get_time_synced_frame_index(video_total_frames, video_fps)
+        status_data.update({
+            "video_total_frames": video_total_frames,
+            "video_fps": video_fps,
+            "video_duration": video_duration,
+            "current_frame": current_frame,
+            "current_time": format_time_from_frame(current_frame, video_fps),
+        })
+    
+    return status_data
 
 @app.post("/control")
 async def control_camera(command: dict):
@@ -302,9 +420,7 @@ async def control_camera(command: dict):
     - {"action": "stop_stream"}
     - {"action": "set_quality", "quality": 90}
     - {"action": "set_resolution", "resolution": "800x600"}
-    - {"action": "reset_frame_counter"}  # 🔥 NEW: Reset global frame counter
     """
-    global global_frame_idx
     
     action = command.get("action")
     
@@ -332,18 +448,6 @@ async def control_camera(command: dict):
         # Template for real ESP32 resolution control
         resolution = command.get("resolution", "640x480")
         return {"success": True, "message": f"Resolution set to {resolution}"}
-    
-    elif action == "reset_frame_counter":
-        # 🔥 NEW: Reset global frame counter
-        old_count = global_frame_idx
-        async with frame_lock:
-            global_frame_idx = 0
-        return {
-            "success": True, 
-            "message": f"Frame counter reset from {old_count} to 0",
-            "old_value": old_count,
-            "new_value": 0
-        }
     
     else:
         raise HTTPException(400, f"Unknown action: {action}")

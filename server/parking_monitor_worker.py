@@ -16,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from services.firebase_service import FirebaseService
 from services.parking_space_service import ParkingSpaceService
 from services.ai_service import AIService
-from services.detection_broadcaster import broadcaster
 
 # Configure logging
 logging.basicConfig(
@@ -31,18 +30,21 @@ class ParkingMonitorWorker:
     
     def __init__(
         self,
-        check_interval: int = 5,  # Check every 5 seconds
-        detection_url: str = "http://localhost:8069"
+        check_interval: float = 0.1,  # Check every 0.1 seconds (10 FPS)
+        detection_url: str = "http://localhost:8069",
+        update_firebase: bool = False  # ❌ Disable slow Firebase writes for high FPS
     ):
         """
         Initialize parking monitor worker
         
         Args:
-            check_interval: Seconds between checks
+            check_interval: Seconds between checks (default: 0.1 for 10 FPS)
             detection_url: URL of the main FastAPI server
+            update_firebase: Whether to update Firebase (slow! disables high FPS)
         """
         self.check_interval = check_interval
         self.detection_url = detection_url
+        self.update_firebase = update_firebase
         
         # Initialize services
         self.firebase_service = FirebaseService()
@@ -55,6 +57,10 @@ class ParkingMonitorWorker:
         
         # Running flag
         self.is_running = False
+        
+        # Last processed time for each camera (for rate limiting)
+        self.last_processed: Dict[str, float] = {}
+        self.min_process_interval: float = 0.1  # Minimum 0.1s between processing same camera (10 FPS max)
     
     async def load_ai_models(self):
         """Load AI models asynchronously"""
@@ -204,13 +210,25 @@ class ParkingMonitorWorker:
         camera_url = camera_info['ip_address']
         
         try:
-            logger.info(f"Processing camera: {camera_info['camera_name']} ({camera_id})")
+            # Rate limiting: skip if processed too recently
+            import time
+            current_time = time.time()
+            last_time = self.last_processed.get(camera_id, 0)
+            
+            if current_time - last_time < self.min_process_interval:
+                # Skip this frame - too soon since last processing
+                return
+            
+            self.last_processed[camera_id] = current_time
+            
+            logger.debug(f"Processing camera: {camera_info['camera_name']} ({camera_id})")
+
             
             # Get parking spaces for this camera (use cache)
             if camera_id not in self.camera_spaces_cache:
                 spaces = self.parking_service.get_parking_spaces_by_camera(camera_id)
                 self.camera_spaces_cache[camera_id] = spaces
-                logger.info(f"Loaded {len(spaces)} parking spaces for camera {camera_id}")
+                logger.info(f"✅ Loaded {len(spaces)} parking spaces for camera {camera_id}")
             else:
                 spaces = self.camera_spaces_cache[camera_id]
             
@@ -239,7 +257,7 @@ class ParkingMonitorWorker:
             
             # Detect vehicles (pass the decoded frame, not bytes)
             detections = await self.detect_vehicles_in_frame(frame)
-            logger.info(f"Detected {len(detections)} vehicles in camera {camera_id}")
+            logger.debug(f"🚗 Detected {len(detections)} vehicles in camera {camera_id}")
             
             # Match detections to parking spaces
             matched_detections, space_occupancy = self.parking_service.match_detections_to_spaces(
@@ -272,19 +290,20 @@ class ParkingMonitorWorker:
                 }
             )
             
-            # Update Firebase with occupancy status
-            success = self.parking_service.update_space_occupancy(
-                parking_id=parking_id,
-                camera_id=camera_id,
-                space_occupancy=space_occupancy
-            )
-            
-            if success:
-                occupied_count = sum(space_occupancy.values())
-                total_count = len(space_occupancy)
-                logger.info(f"✅ Updated occupancy for camera {camera_id}: {occupied_count}/{total_count} occupied")
-            else:
-                logger.error(f"Failed to update occupancy for camera {camera_id}")
+            # Update Firebase with occupancy status (SLOW! Only if enabled)
+            if self.update_firebase:
+                success = self.parking_service.update_space_occupancy(
+                    parking_id=parking_id,
+                    camera_id=camera_id,
+                    space_occupancy=space_occupancy
+                )
+                
+                if success:
+                    occupied_count = sum(space_occupancy.values())
+                    total_count = len(space_occupancy)
+                    logger.debug(f"✅ Updated Firebase occupancy for camera {camera_id}: {occupied_count}/{total_count} occupied")
+                else:
+                    logger.error(f"Failed to update Firebase occupancy for camera {camera_id}")
             
         except Exception as e:
             logger.error(f"Error processing camera {camera_id}: {e}", exc_info=True)
@@ -315,32 +334,29 @@ class ParkingMonitorWorker:
         import cv2
         import numpy as np
         
-        # Draw parking spaces
+        # Draw parking spaces (rectangles from normalized x, y, width, height)
         for space in parking_spaces:
             space_id = space['id']
             is_occupied = space_occupancy.get(space_id, False)
             
             # Convert normalized coordinates to pixels
-            coords = space['coordinates']
-            points = []
-            for coord in coords:
-                x = int(coord['x'] * image_width)
-                y = int(coord['y'] * image_height)
-                points.append([x, y])
+            x = int(space['x'] * image_width)
+            y = int(space['y'] * image_height)
+            w = int(space['width'] * image_width)
+            h = int(space['height'] * image_height)
             
-            points = np.array(points, dtype=np.int32)
+            x1, y1 = x, y
+            x2, y2 = x + w, y + h
             
             # Color: Red if occupied, Green if free
             color = (0, 0, 255) if is_occupied else (0, 255, 0)
             
-            # Draw polygon
-            cv2.polylines(frame, [points], isClosed=True, color=color, thickness=2)
+            # Draw rectangle
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             
             # Draw label
-            label = f"{space['name']}: {'Occupied' if is_occupied else 'Free'}"
-            cx = int(np.mean([p[0] for p in points]))
-            cy = int(np.mean([p[1] for p in points]))
-            cv2.putText(frame, label, (cx - 50, cy), cv2.FONT_HERSHEY_SIMPLEX, 
+            label = f"{space.get('name', space_id)}: {'Occupied' if is_occupied else 'Free'}"
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 
                        0.5, color, 1, cv2.LINE_AA)
         
         # Draw vehicle detections
@@ -362,7 +378,7 @@ class ParkingMonitorWorker:
     
     async def broadcast_frame_to_viewers(self, camera_id: str, frame, metadata: dict):
         """
-        Broadcast annotated frame to all connected viewers
+        Send annotated frame to FastAPI server which will broadcast to viewers
         
         Args:
             camera_id: Camera identifier
@@ -372,47 +388,53 @@ class ParkingMonitorWorker:
         import cv2
         import base64
         
-        # Check if anyone is watching
-        viewer_count = broadcaster.get_viewer_count(camera_id)
-        if viewer_count == 0:
-            return  # No viewers, skip encoding
-        
         try:
             # Encode frame to JPEG
             _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             frame_base64 = base64.b64encode(buffer).decode('utf-8')
             
-            # Broadcast to all viewers
-            await broadcaster.broadcast_frame(camera_id, frame_base64, metadata)
-            
-            logger.debug(f"📺 Broadcasted frame to {viewer_count} viewers (camera: {camera_id})")
+            # Send to FastAPI server via HTTP POST
+            async with aiohttp.ClientSession() as session:
+                broadcast_url = f'{self.detection_url}/api/broadcast-detection'
+                payload = {
+                    'camera_id': camera_id,
+                    'frame_base64': frame_base64,
+                    'metadata': metadata
+                }
+                
+                async with session.post(broadcast_url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        logger.debug(f"📺 Sent frame to FastAPI for camera {camera_id}")
+                    else:
+                        logger.warning(f"Failed to send frame to FastAPI: HTTP {response.status}")
         
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout sending frame to FastAPI")
         except Exception as e:
             logger.error(f"Error broadcasting frame: {e}")
     
     async def monitor_loop(self):
         """Main monitoring loop"""
         logger.info("🚀 Starting parking monitor worker...")
-        logger.info(f"⏱️  Check interval: {self.check_interval} seconds")
+        logger.info(f"⏱️  Target FPS: {int(1/self.min_process_interval)} FPS per camera")
         
         self.is_running = True
         
         while self.is_running:
             try:
-                # Get active cameras
+                # Get active cameras (cache this to avoid repeated Firebase calls)
                 active_cameras = await self.get_active_cameras()
                 
                 if not active_cameras:
                     logger.warning("No active cameras found. Waiting...")
-                else:
-                    logger.info(f"Found {len(active_cameras)} active cameras")
+                    await asyncio.sleep(1.0)  # Wait longer if no cameras
+                    continue
                     
-                    # Process each camera
-                    tasks = [self.process_camera(camera) for camera in active_cameras]
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                # Process each camera (rate limiting is handled inside process_camera)
+                tasks = [self.process_camera(camera) for camera in active_cameras]
+                await asyncio.gather(*tasks, return_exceptions=True)
                 
-                # Wait before next check
-                logger.info(f"Waiting {self.check_interval} seconds before next check...")
+                # Short sleep to avoid busy-waiting, but fast enough for high FPS
                 await asyncio.sleep(self.check_interval)
                 
             except KeyboardInterrupt:
@@ -422,7 +444,8 @@ class ParkingMonitorWorker:
             except Exception as e:
                 logger.error(f"Error in monitor loop: {e}", exc_info=True)
                 # Wait a bit before retrying
-                await asyncio.sleep(self.check_interval)
+                await asyncio.sleep(1.0)
+
     
     async def start(self):
         """Start the worker"""
@@ -453,12 +476,23 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Parking Monitor Worker')
-    parser.add_argument('--interval', type=int, default=5, help='Check interval in seconds (default: 5)')
+    parser.add_argument('--interval', type=float, default=0.1, 
+                       help='Check interval in seconds (default: 0.1 for 10 FPS)')
+    parser.add_argument('--fps', type=int, default=10, 
+                       help='Target FPS per camera (default: 10)')
     parser.add_argument('--detection-url', type=str, default='http://localhost:8069', 
                        help='FastAPI server URL (default: http://localhost:8069)')
+    parser.add_argument('--update-firebase', action='store_true', 
+                       help='Enable Firebase updates (SLOW! reduces FPS to ~0.3)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     
     args = parser.parse_args()
+    
+    # Calculate interval from FPS if provided
+    if args.fps:
+        check_interval = 1.0 / args.fps
+    else:
+        check_interval = args.interval
     
     # Set log level
     if args.debug:
@@ -467,8 +501,9 @@ async def main():
     
     # Create and start worker
     worker = ParkingMonitorWorker(
-        check_interval=args.interval,
-        detection_url=args.detection_url
+        check_interval=check_interval,
+        detection_url=args.detection_url,
+        update_firebase=args.update_firebase
     )
     
     try:

@@ -76,6 +76,7 @@ export async function getUserESP32Configs(userId: string): Promise<ESP32Config[]
         createdAt: new Date(data.createdAt),
         updatedAt: new Date(data.updatedAt),
         isDefault: data.isDefault || false,
+        workerEnabled: data.workerEnabled || false,
       });
     });
     
