@@ -9,6 +9,8 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import sys
+import concurrent.futures
+import functools
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -24,6 +26,29 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def run_with_timeout(func, timeout_seconds=10):
+    """
+    Run a blocking function with timeout using ThreadPoolExecutor
+    
+    Args:
+        func: Function to run
+        timeout_seconds: Timeout in seconds
+        
+    Returns:
+        Result of the function or None if timeout
+        
+    Raises:
+        TimeoutError: If function takes longer than timeout_seconds
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError:
+            logger.error(f"⏱️ Function {func.__name__} timed out after {timeout_seconds} seconds")
+            raise TimeoutError(f"Function execution exceeded {timeout_seconds} seconds")
 
 
 class ParkingMonitorWorker:
@@ -58,6 +83,9 @@ class ParkingMonitorWorker:
         # Track active cameras
         self.active_cameras: Set[str] = set()
         self.camera_spaces_cache: Dict[str, List[Dict]] = {}
+        self.active_cameras_cache: List[Dict] = []  # Cache for active cameras list
+        self.last_cameras_refresh: float = 0  # Last time we refreshed camera list
+        self.cameras_refresh_interval: float = 30.0  # Refresh camera list every 30 seconds
         
         # Running flag
         self.is_running = False
@@ -136,55 +164,126 @@ class ParkingMonitorWorker:
     
     async def get_active_cameras(self) -> List[Dict]:
         """
-        Get list of active cameras from Firebase
+        Get list of active cameras from Firebase (with caching to avoid quota issues)
         Returns cameras that have workerEnabled=true
         """
         try:
+            import time
+            current_time = time.time()
+            
+            # Use cached cameras if recent enough (within 30 seconds)
+            if current_time - self.last_cameras_refresh < self.cameras_refresh_interval:
+                if self.active_cameras_cache:
+                    logger.debug(f"Using cached camera list ({len(self.active_cameras_cache)} cameras)")
+                    return self.active_cameras_cache
+            
+            # Refresh camera list from Firebase
+            logger.info("🔄 Refreshing camera list from Firebase...")
+            
             # Query cameras that have been recently active
             # Check parkingLots collection for cameras
-            parking_lots = self.firebase_service.db.collection('parkingLots').stream()
+            try:
+                logger.debug("Querying parkingLots collection...")
+                
+                # Wrap Firebase query in timeout (10 seconds max)
+                def query_parking_lots():
+                    return list(self.firebase_service.db.collection('parkingLots').stream())
+                
+                try:
+                    # Run blocking Firebase query in thread pool with timeout
+                    loop = asyncio.get_event_loop()
+                    parking_lots = await asyncio.wait_for(
+                        loop.run_in_executor(None, query_parking_lots),
+                        timeout=10.0
+                    )
+                    logger.debug(f"Found {len(parking_lots)} parking lots")
+                except asyncio.TimeoutError:
+                    logger.error("⏱️ Firebase query timed out after 10 seconds!")
+                    logger.error("💡 This usually means:")
+                    logger.error("   1. No internet connection")
+                    logger.error("   2. Firebase credentials are invalid")
+                    logger.error("   3. Firestore security rules blocking access")
+                    if self.active_cameras_cache:
+                        logger.warning(f"Using cached camera list ({len(self.active_cameras_cache)} cameras)")
+                        return self.active_cameras_cache
+                    else:
+                        logger.error("No cached cameras available, returning empty list")
+                        return []
+                        
+            except Exception as query_error:
+                logger.error(f"Firebase query failed: {query_error}")
+                if "429" in str(query_error) or "quota" in str(query_error).lower():
+                    logger.error("⚠️ Firebase quota exceeded! Using cached data and increasing cache interval...")
+                    # Increase cache interval to 60 seconds if hitting quota limits
+                    self.cameras_refresh_interval = 60.0
+                if self.active_cameras_cache:
+                    logger.warning(f"Using cached camera list ({len(self.active_cameras_cache)} cameras)")
+                    return self.active_cameras_cache
+                else:
+                    logger.error("No cached cameras available, returning empty list")
+                    return []
             
             active_cameras = []
             for lot_doc in parking_lots:
-                lot_data = lot_doc.to_dict()
-                
-                # Only process active parking lots
-                if lot_data.get('status') != 'active':
-                    logger.debug(f"Skipping inactive parking lot: {lot_doc.id}")
-                    continue
-                
-                # Get cameras for this parking lot
-                camera_ids = lot_data.get('cameras', [])
-                
-                for camera_id in camera_ids:
-                    # Get camera config from esp32_configs
-                    camera_ref = self.firebase_service.db.collection('esp32_configs').document(camera_id)
-                    camera_doc = camera_ref.get()
+                try:
+                    lot_data = lot_doc.to_dict()
                     
-                    if camera_doc.exists:
-                        camera_data = camera_doc.to_dict()
-                        
-                        # Check if worker is enabled for this camera
-                        worker_enabled = camera_data.get('workerEnabled', False)
-                        
-                        if not worker_enabled:
-                            logger.debug(f"Skipping camera with worker disabled: {camera_data.get('name', camera_id)}")
+                    # Only process active parking lots
+                    if lot_data.get('status') != 'active':
+                        logger.debug(f"Skipping inactive parking lot: {lot_doc.id}")
+                        continue
+                    
+                    logger.debug(f"Processing parking lot: {lot_doc.id}")
+                    
+                    # Get cameras for this parking lot
+                    camera_ids = lot_data.get('cameras', [])
+                    logger.debug(f"Parking lot {lot_doc.id} has {len(camera_ids)} cameras")
+                    
+                    for camera_id in camera_ids:
+                        try:
+                            # Get camera config from esp32_configs
+                            camera_ref = self.firebase_service.db.collection('esp32_configs').document(camera_id)
+                            camera_doc = camera_ref.get()
+                            
+                            if camera_doc.exists:
+                                camera_data = camera_doc.to_dict()
+                                
+                                # Check if worker is enabled for this camera
+                                worker_enabled = camera_data.get('workerEnabled', False)
+                                
+                                if not worker_enabled:
+                                    logger.debug(f"Skipping camera with worker disabled: {camera_data.get('name', camera_id)}")
+                                    continue
+                                
+                                logger.info(f"Found worker-enabled camera: {camera_data.get('name', camera_id)}")
+                                active_cameras.append({
+                                    'camera_id': camera_id,
+                                    'parking_id': lot_doc.id,
+                                    'camera_name': camera_data.get('name', camera_id),
+                                    'ip_address': camera_data.get('ipAddress', ''),
+                                })
+                            else:
+                                logger.warning(f"Camera config not found: {camera_id}")
+                        except Exception as camera_error:
+                            logger.error(f"Error processing camera {camera_id}: {camera_error}")
                             continue
-                        
-                        logger.info(f"Found worker-enabled camera: {camera_data.get('name', camera_id)}")
-                        active_cameras.append({
-                            'camera_id': camera_id,
-                            'parking_id': lot_doc.id,
-                            'camera_name': camera_data.get('name', camera_id),
-                            'ip_address': camera_data.get('ipAddress', ''),
-                        })
-                    else:
-                        logger.warning(f"Camera config not found: {camera_id}")
+                except Exception as lot_error:
+                    logger.error(f"Error processing parking lot {lot_doc.id}: {lot_error}")
+                    continue
+            
+            # Update cache
+            self.active_cameras_cache = active_cameras
+            self.last_cameras_refresh = current_time
+            logger.info(f"✅ Refreshed camera list: {len(active_cameras)} active cameras")
             
             return active_cameras
             
         except Exception as e:
             logger.error(f"Error getting active cameras: {e}")
+            # Return cached cameras if available, empty list otherwise
+            if self.active_cameras_cache:
+                logger.warning(f"Using cached camera list due to error ({len(self.active_cameras_cache)} cameras)")
+                return self.active_cameras_cache
             return []
     
     async def fetch_camera_frame(self, camera_url: str) -> bytes:

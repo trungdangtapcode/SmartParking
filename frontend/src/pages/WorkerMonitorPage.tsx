@@ -477,7 +477,193 @@ export function WorkerMonitorPage() {
             </div>
           </div>
 
-          {/* Right Column: Logs - Hidden until backend API is implemented */}
+          {/* Right Column: Detection & Tracking Info */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Real-time Detection Stats */}
+            <div className="bg-white rounded-xl shadow-lg p-6 border-2 border-blue-200">
+              <h2 className="text-xl font-bold text-blue-900 mb-4">📊 Real-time Detection & Tracking</h2>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="p-4 bg-gradient-to-br from-green-50 to-green-100 rounded-lg border border-green-300">
+                  <div className="text-3xl mb-2">🚗</div>
+                  <div className="text-2xl font-bold text-green-900">
+                    {workerStatuses.reduce((sum, s) => sum + (s.occupiedCount || 0), 0)}
+                  </div>
+                  <div className="text-sm text-gray-600">Vehicles Detected</div>
+                </div>
+                
+                <div className="p-4 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-300">
+                  <div className="text-3xl mb-2">🎯</div>
+                  <div className="text-2xl font-bold text-blue-900">
+                    {workerStatuses.reduce((sum, s) => sum + (s.spacesCount || 0), 0)}
+                  </div>
+                  <div className="text-sm text-gray-600">Total Parking Spaces</div>
+                </div>
+              </div>
+
+              {/* Active Cameras Grid */}
+              <div className="space-y-3">
+                <h3 className="font-semibold text-gray-700">Active Camera Details:</h3>
+                {cameras.filter(c => c.workerEnabled).length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No active workers. Enable workers on cameras to see live stats.
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {cameras.filter(c => c.workerEnabled).map(camera => {
+                      const status = workerStatuses.find(s => s.cameraId === camera.id);
+                      return (
+                        <div key={camera.id} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-2xl">📹</span>
+                              <div>
+                                <h4 className="font-bold text-gray-900">{camera.name}</h4>
+                                <p className="text-xs text-gray-500">{camera.ipAddress}</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleViewDetectionStream(camera.id)}
+                              className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+                            >
+                              📹 View Live
+                            </button>
+                          </div>
+                          
+                          {status && (
+                            <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-gray-300">
+                              <div className="text-center p-2 bg-white rounded border border-gray-200">
+                                <div className="text-lg font-bold text-gray-900">
+                                  {status.spacesCount || 0}
+                                </div>
+                                <div className="text-xs text-gray-600">Spaces</div>
+                              </div>
+                              <div className="text-center p-2 bg-red-50 rounded border border-red-200">
+                                <div className="text-lg font-bold text-red-900">
+                                  {status.occupiedCount || 0}
+                                </div>
+                                <div className="text-xs text-gray-600">Occupied</div>
+                              </div>
+                              <div className="text-center p-2 bg-green-50 rounded border border-green-200">
+                                <div className="text-lg font-bold text-green-900">
+                                  {(status.spacesCount || 0) - (status.occupiedCount || 0)}
+                                </div>
+                                <div className="text-xs text-gray-600">Available</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ByteTrack Configuration Info */}
+            <div className="bg-white rounded-xl shadow-lg p-6 border-2 border-purple-200">
+              <h2 className="text-xl font-bold text-purple-900 mb-4">🎯 ByteTrack Configuration</h2>
+              
+              <div className="space-y-4">
+                <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+                  <h3 className="font-semibold text-purple-900 mb-2">🔧 Tracking Settings</h3>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-gray-600">Track High Thresh:</span>
+                      <span className="ml-2 font-medium">0.5</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Track Low Thresh:</span>
+                      <span className="ml-2 font-medium">0.1</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">New Track Thresh:</span>
+                      <span className="ml-2 font-medium">0.6</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Track Buffer:</span>
+                      <span className="ml-2 font-medium">30 frames</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <h3 className="font-semibold text-blue-900 mb-2">⚡ Performance Settings</h3>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-gray-600">Target FPS:</span>
+                      <span className="ml-2 font-medium">10 fps</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Image Size:</span>
+                      <span className="ml-2 font-medium">640px</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Conf Threshold:</span>
+                      <span className="ml-2 font-medium">0.25</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Device:</span>
+                      <span className="ml-2 font-medium">CUDA (GPU)</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-yellow-50 border border-yellow-300 rounded-lg">
+                  <p className="text-sm text-yellow-900">
+                    <strong>💡 Note:</strong> Configuration can be adjusted in <code className="bg-yellow-100 px-1 py-0.5 rounded">server/config/tracking_config.yaml</code>
+                  </p>
+                  <p className="text-xs text-yellow-800 mt-2">
+                    • <strong>High Accuracy:</strong> Increase conf_threshold & imgsz, decrease fps<br/>
+                    • <strong>High Speed:</strong> Decrease imgsz & conf_threshold, increase fps & skip_frames
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* System Info */}
+            <div className="bg-white rounded-xl shadow-lg p-6 border-2 border-green-200">
+              <h2 className="text-xl font-bold text-green-900 mb-4">🖥️ System Information</h2>
+              
+              <div className="space-y-3">
+                <div className="p-3 bg-green-50 rounded-lg border border-green-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xl">🚀</span>
+                    <h3 className="font-semibold text-green-900">GPU Acceleration</h3>
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    NVIDIA CUDA enabled for real-time vehicle detection and tracking
+                  </p>
+                </div>
+
+                <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xl">🤖</span>
+                    <h3 className="font-semibold text-blue-900">AI Models</h3>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-1">
+                    <li>• <strong>YOLO v8:</strong> Vehicle detection</li>
+                    <li>• <strong>ByteTrack:</strong> Multi-object tracking</li>
+                    <li>• <strong>Fast-ALPR:</strong> License plate recognition</li>
+                  </ul>
+                </div>
+
+                <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xl">📡</span>
+                    <h3 className="font-semibold text-purple-900">Backend</h3>
+                  </div>
+                  <ul className="text-sm text-gray-600 space-y-1">
+                    <li>• <strong>FastAPI:</strong> http://localhost:8069</li>
+                    <li>• <strong>Worker Service:</strong> Background processing</li>
+                    <li>• <strong>Firebase:</strong> Real-time database sync</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Hidden Logs Section - Keep for future implementation */}
           {false && (
           <div className="lg:col-span-2">
             <div className="bg-white rounded-xl shadow-lg border-2 border-yellow-200">

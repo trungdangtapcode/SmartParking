@@ -1,7 +1,7 @@
 """
-AI Service - YOLO Object Tracking + License Plate Recognition
+AI Service - YOLO Object Detection & ByteTrack Tracking + License Plate Recognition
 Tích hợp trực tiếp, KHÔNG spawn subprocess
-Supports CUDA GPU acceleration
+Supports CUDA GPU acceleration and multi-object tracking
 """
 import base64
 import tempfile
@@ -9,7 +9,7 @@ import os
 import cv2
 import numpy as np
 import torch
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 # Import AI libraries
@@ -23,13 +23,17 @@ except ImportError as e:
 
 
 class AIService:
-    """AI Service quản lý YOLO và ALPR models với CUDA support"""
+    """AI Service quản lý YOLO và ALPR models với CUDA support và ByteTrack tracking"""
     
     def __init__(self):
         self.yolo_model = None
         self.alpr_model = None
         self.models_loaded = False
         self.device = None
+        
+        # Tracking state
+        self.track_history = {}  # Store track trails
+        self.frame_count = 0
         
         # Paths
         self.script_dir = Path(__file__).parent.parent
@@ -220,15 +224,17 @@ class AIService:
         self,
         frame: np.ndarray,
         conf_threshold: float = 0.25,
-        iou_threshold: float = 0.45
+        iou_threshold: float = 0.45,
+        use_tracking: bool = False
     ) -> list:
         """
-        Detect objects in a single frame using YOLO
+        Detect or track objects in a single frame using YOLO
         
         Args:
             frame: OpenCV image (numpy array)
             conf_threshold: Detection confidence threshold
             iou_threshold: IOU threshold for NMS
+            use_tracking: If True, use ByteTrack tracking instead of detection only
         
         Returns:
             List of detections with format:
@@ -236,7 +242,8 @@ class AIService:
                 {
                     'class': 'car',
                     'confidence': 0.85,
-                    'bbox': [x, y, width, height]  # In pixels
+                    'bbox': [x, y, width, height],  # In pixels
+                    'track_id': 12  # Only if use_tracking=True
                 }
             ]
         """
@@ -247,20 +254,37 @@ class AIService:
             return []
         
         try:
-            # Run YOLO prediction
-            results = self.yolo_model.predict(
-                source=frame,
-                conf=conf_threshold,
-                iou=iou_threshold,
-                verbose=False,
-                device=self.device
-            )
+            self.frame_count += 1
+            
+            if use_tracking:
+                # Use ByteTrack tracking
+                results = self.yolo_model.track(
+                    source=frame,
+                    conf=conf_threshold,
+                    iou=iou_threshold,
+                    persist=True,  # Keep track IDs between frames
+                    verbose=False,
+                    device=self.device,
+                    tracker="bytetrack.yaml"  # Use ByteTrack
+                )
+            else:
+                # Detection only (no tracking)
+                results = self.yolo_model.predict(
+                    source=frame,
+                    conf=conf_threshold,
+                    iou=iou_threshold,
+                    verbose=False,
+                    device=self.device
+                )
             
             detections = []
             
             # Process results
             for result in results:
                 boxes = result.boxes
+                
+                if boxes is None:
+                    continue
                 
                 for box in boxes:
                     # Get box coordinates (xyxy format)
@@ -277,17 +301,115 @@ class AIService:
                     conf = float(box.conf[0])
                     class_name = result.names[cls_id]
                     
-                    detections.append({
+                    detection = {
                         'class': class_name,
                         'confidence': conf,
                         'bbox': [x, y, width, height]
-                    })
+                    }
+                    
+                    # Add track_id if tracking is enabled
+                    if use_tracking and hasattr(box, 'id') and box.id is not None:
+                        track_id = int(box.id[0])
+                        detection['track_id'] = track_id
+                        
+                        # Update track history for trail visualization
+                        center_x = int((x1 + x2) / 2)
+                        center_y = int((y1 + y2) / 2)
+                        
+                        if track_id not in self.track_history:
+                            self.track_history[track_id] = []
+                        
+                        self.track_history[track_id].append((center_x, center_y))
+                        
+                        # Keep only last 30 points
+                        if len(self.track_history[track_id]) > 30:
+                            self.track_history[track_id].pop(0)
+                    
+                    detections.append(detection)
             
             return detections
             
         except Exception as e:
             print(f"❌ Error in detect_objects: {e}")
             return []
+    
+    def draw_detections(
+        self,
+        frame: np.ndarray,
+        detections: List[Dict],
+        show_trails: bool = True,
+        show_track_id: bool = True
+    ) -> np.ndarray:
+        """
+        Draw bounding boxes and tracking trails on frame
+        
+        Args:
+            frame: Input image
+            detections: List of detections from detect_objects()
+            show_trails: Draw tracking trails
+            show_track_id: Show track IDs in labels
+        
+        Returns:
+            Annotated frame
+        """
+        annotated = frame.copy()
+        
+        for det in detections:
+            x, y, w, h = det['bbox']
+            x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+            
+            class_name = det['class']
+            confidence = det['confidence']
+            track_id = det.get('track_id')
+            
+            # Color based on track ID or class
+            if track_id is not None:
+                color = self._get_track_color(track_id)
+            else:
+                color = (0, 255, 0)  # Green for detections without tracking
+            
+            # Draw bounding box
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            
+            # Draw label
+            if show_track_id and track_id is not None:
+                label = f"ID:{track_id} {class_name} {confidence:.2f}"
+            else:
+                label = f"{class_name} {confidence:.2f}"
+            
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 6, y1), color, -1)
+            cv2.putText(
+                annotated,
+                label,
+                (x1 + 3, y1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2
+            )
+            
+            # Draw tracking trail
+            if show_trails and track_id is not None and track_id in self.track_history:
+                points = self.track_history[track_id]
+                if len(points) > 1:
+                    for i in range(1, len(points)):
+                        cv2.line(annotated, points[i-1], points[i], color, 2)
+        
+        return annotated
+    
+    def _get_track_color(self, track_id: int) -> tuple:
+        """Generate consistent color for each track ID"""
+        # Use hash to generate consistent RGB values
+        np.random.seed(track_id)
+        color = tuple(np.random.randint(50, 255, 3).tolist())
+        np.random.seed()  # Reset seed
+        return color
+    
+    def reset_tracking(self):
+        """Reset tracking state (clear track history)"""
+        self.track_history = {}
+        self.frame_count = 0
     
     async def track_objects(
         self,

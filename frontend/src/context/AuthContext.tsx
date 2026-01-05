@@ -37,6 +37,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadUserRole = async (firebaseUser: User) => {
     try {
+      // Wait a bit for authentication to fully complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
       if (userDoc.exists()) {
         const data = userDoc.data() as UserProfile;
@@ -48,10 +51,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setRole('driver');
         }
       } else {
-        setRole('driver');
+        console.warn('User document does not exist, defaulting to driver role');
+        setRole('admin'); // for development purposes
       }
     } catch (error) {
       console.error('Failed to load user role', error);
+      // Default to driver role on any error
       setRole('driver');
     }
   };

@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { fetchLatestDetections, type DetectionRecord } from '../services/detectionService';
 import { createStreamSession, updateStreamSessionStatus } from '../services/streamService';
-import { getParkingLotsByOwner, addCameraToParkingLot } from '../services/parkingLotService';
+import { getParkingLotsByOwner, addCameraToParkingLot, removeCameraFromParkingLot, getParkingLot } from '../services/parkingLotService';
 import { 
   getUserESP32Configs,
   type ESP32Config 
@@ -514,6 +513,9 @@ export function MultiStreamHostPage() {
   const [parkingIdError, setParkingIdError] = useState<string | null>(null);
   const [cameraIdError, setCameraIdError] = useState<string | null>(null);
   const [tiles, setTiles] = useState<HostTileConfig[]>([]);
+  const [existingCameras, setExistingCameras] = useState<string[]>([]);
+  const [loadingCameras, setLoadingCameras] = useState(false);
+  const [camerasLoaded, setCamerasLoaded] = useState(false);
 
   // Load ESP32 cameras from saved configs
   useEffect(() => {
@@ -557,6 +559,37 @@ export function MultiStreamHostPage() {
     load();
   }, [ownerId]);
 
+  // Reset cameras when parking lot changes
+  useEffect(() => {
+    setExistingCameras([]);
+    setCamerasLoaded(false);
+  }, [parkingLotId]);
+
+  // Manual load cameras function
+  const loadCameras = async () => {
+    if (!parkingLotId.trim()) {
+      setExistingCameras([]);
+      return;
+    }
+    
+    setLoadingCameras(true);
+    try {
+      const lot = await getParkingLot(parkingLotId.trim());
+      if (lot) {
+        console.log(`[MultiStreamHost] Loaded cameras for ${parkingLotId}:`, lot.cameras);
+        setExistingCameras(lot.cameras || []);
+        setCamerasLoaded(true);
+      } else {
+        setExistingCameras([]);
+      }
+    } catch (err) {
+      console.error('[MultiStreamHost] Failed to load cameras:', err);
+      setExistingCameras([]);
+    } finally {
+      setLoadingCameras(false);
+    }
+  };
+
   const validateParkingId = (value: string) => {
     if (!value.trim()) {
       setParkingIdError('Parking Lot ID không được để trống');
@@ -589,6 +622,10 @@ export function MultiStreamHostPage() {
       const result = await addCameraToParkingLot(lot, cam);
       if (result.success) {
         console.log(`[MultiStreamHost] ✅ Camera ${cam} added to parking lot ${lot}`);
+        // Only update local state if cameras are already loaded
+        if (camerasLoaded) {
+          setExistingCameras(prev => [...prev, cam]);
+        }
       } else {
         console.warn(`[MultiStreamHost] ⚠️ Failed to add camera:`, result.error);
         alert(`⚠️ Không thể thêm camera vào parking lot: ${result.error}`);
@@ -603,6 +640,32 @@ export function MultiStreamHostPage() {
       if (exists) return prev;
       return [...prev, { id, parkingLotId: lot, cameraId: cam }];
     });
+  };
+
+  const handleRemoveCamera = async (cameraIdToRemove: string) => {
+    if (!parkingLotId.trim()) return;
+    
+    const confirmed = window.confirm(
+      `Bạn có chắc chắn muốn xóa camera "${cameraIdToRemove}" khỏi parking lot "${parkingLotId}"?`
+    );
+    
+    if (!confirmed) return;
+    
+    try {
+      const result = await removeCameraFromParkingLot(parkingLotId.trim(), cameraIdToRemove);
+      if (result.success) {
+        console.log(`[MultiStreamHost] ✅ Camera ${cameraIdToRemove} removed from parking lot ${parkingLotId}`);
+        // Update local state only - no Firebase read
+        setExistingCameras(prev => prev.filter(cam => cam !== cameraIdToRemove));
+        alert(`✅ Đã xóa camera "${cameraIdToRemove}" thành công!`);
+      } else {
+        console.warn(`[MultiStreamHost] ⚠️ Failed to remove camera:`, result.error);
+        alert(`⚠️ Không thể xóa camera: ${result.error}`);
+      }
+    } catch (error) {
+      console.error(`[MultiStreamHost] ❌ Error removing camera:`, error);
+      alert(`❌ Lỗi khi xóa camera: ${error}`);
+    }
   };
 
   const canAdd =
@@ -798,6 +861,71 @@ export function MultiStreamHostPage() {
           </ul>
         </div>
       </div>
+
+      {/* Existing Cameras in Selected Parking Lot */}
+      {parkingLotId && (
+        <div className="mb-6 bg-white border border-gray-200 rounded-2xl shadow-sm p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-bold text-gray-900">
+              📹 Cameras trong "{parkingLotId}"
+            </h3>
+            <button
+              onClick={loadCameras}
+              disabled={loadingCameras}
+              className={`px-4 py-2 rounded-lg font-semibold text-sm transition ${
+                loadingCameras
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+              }`}
+            >
+              {loadingCameras ? '⏳ Đang tải...' : '🔄 Tải danh sách cameras'}
+            </button>
+          </div>
+          
+          {!camerasLoaded && !loadingCameras ? (
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-center">
+              <p className="text-sm text-blue-800 mb-2">
+                <strong>💡 Click "🔄 Tải danh sách cameras"</strong> để xem cameras trong parking lot này
+              </p>
+              <p className="text-xs text-blue-600">
+                (Chỉ tải khi cần để tiết kiệm Firebase quota)
+              </p>
+            </div>
+          ) : existingCameras.length === 0 && camerasLoaded ? (
+            <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg text-center text-sm text-gray-500">
+              Chưa có camera nào trong parking lot này.
+            </div>
+          ) : camerasLoaded ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {existingCameras.map((cam) => (
+                <div
+                  key={cam}
+                  className="flex items-center justify-between p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg hover:shadow-md transition"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">📹</span>
+                    <span className="font-semibold text-gray-800">{cam}</span>
+                  </div>
+                  <button
+                    onClick={() => handleRemoveCamera(cam)}
+                    className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition"
+                    title="Xóa camera khỏi parking lot"
+                  >
+                    🗑️ Xóa
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          
+          <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <p className="text-xs text-yellow-800">
+              <strong>⚠️ Lưu ý:</strong> Xóa camera khỏi parking lot sẽ không xóa stream đang chạy. 
+              Bạn cần dừng stream host tile bên dưới nếu muốn. Click "🔄 Tải danh sách" để refresh sau khi thêm/xóa camera.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Grid hosts */}
       {tiles.length === 0 ? (

@@ -1,7 +1,7 @@
 # Conda Environment cho SmartParking FastAPI Backend
 # Usage: conda env create -f environment.yml
 
-name: smartparking
+name: smartparking # called 
 channels:
   - pytorch
   - conda-forge

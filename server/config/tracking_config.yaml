@@ -1,0 +1,94 @@
+# Tracking Configuration for ByteTrack
+# Adjust these settings based on your hardware and accuracy requirements
+
+tracking:
+  enabled: true  # Enable object tracking (disable for detection only)
+  tracker: "bytetrack"  # Options: "bytetrack", "botsort"
+  
+  # ByteTrack Parameters
+  bytetrack:
+    track_high_thresh: 0.5    # High confidence threshold for confirmed tracks (0.3-0.7)
+    track_low_thresh: 0.1     # Low confidence threshold for unconfirmed tracks (0.05-0.3)
+    new_track_thresh: 0.6     # Threshold to create new track (0.4-0.7)
+    track_buffer: 30          # Number of frames to keep lost tracks (15-60)
+    match_thresh: 0.8         # IOU threshold for matching (0.6-0.9)
+    
+  # General Tracking Settings
+  persist: true               # Keep track IDs between frames
+  max_age: 30                 # Max frames to keep track without detection
+  min_hits: 3                 # Min detections before confirmed track
+  
+# Detection Settings  
+detection:
+  conf_threshold: 0.25        # Detection confidence threshold (0.1-0.9)
+  iou_threshold: 0.45         # NMS IOU threshold (0.3-0.7)
+  max_det: 300                # Maximum detections per image
+  
+  # Class filtering (empty = all classes)
+  classes: [2, 3, 5, 7]       # 2=car, 3=motorcycle, 5=bus, 7=truck
+  
+# Performance Settings
+performance:
+  fps: 10                     # Target FPS for processing (1-30)
+  skip_frames: 0              # Skip N frames between detections (0=no skip)
+  
+  # Computational trade-offs
+  use_half: true              # Use FP16 for faster inference (requires GPU)
+  imgsz: 640                  # Input image size (320/640/1280)
+  
+  # Multi-threading
+  workers: 4                  # Number of workers for data loading
+  
+# Visualization Settings
+visualization:
+  show_boxes: true            # Draw bounding boxes
+  show_labels: true           # Show class labels
+  show_conf: true             # Show confidence scores
+  show_track_id: true         # Show track IDs
+  show_trail: true            # Show track trails/trajectories
+  trail_length: 30            # Number of points in trail
+  
+  # Box styling
+  box_thickness: 2            # Bounding box line thickness (1-5)
+  font_scale: 0.6             # Label font size (0.3-1.0)
+  
+# Hardware Settings
+hardware:
+  device: "cuda"              # "cuda", "cpu", or "cuda:0" for specific GPU
+  batch_size: 1               # Batch size for inference (1-8)
+  
+# Logging
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR
+  log_detections: true        # Log detection results
+  log_tracks: true            # Log tracking results
+  log_performance: true       # Log FPS and performance metrics
+
+# Presets for different scenarios
+# Uncomment one to use, or customize above
+
+# # PRESET: High Accuracy (Slower, more accurate)
+# performance:
+#   fps: 5
+#   skip_frames: 0
+#   imgsz: 1280
+# detection:
+#   conf_threshold: 0.4
+# tracking:
+#   bytetrack:
+#     track_high_thresh: 0.6
+#     new_track_thresh: 0.7
+
+# # PRESET: Balanced (Default above)
+
+# # PRESET: High Speed (Faster, less accurate)
+# performance:
+#   fps: 20
+#   skip_frames: 2
+#   imgsz: 320
+# detection:
+#   conf_threshold: 0.15
+# tracking:
+#   bytetrack:
+#     track_high_thresh: 0.3
+#     new_track_thresh: 0.4

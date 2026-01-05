@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ByteTrack Tracking Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .video-panel {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .controls-panel {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            height: fit-content;
+        }
+
+        .video-container {
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+            aspect-ratio: 16 / 9;
+        }
+
+        #trackingStream {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .placeholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+        }
+
+        .placeholder-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .control-group label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .control-group input[type="text"],
+        .control-group input[type="number"],
+        .control-group select {
+            width: 100%;
+            padding: 10px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .control-group input:focus,
+        .control-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .slider-container input[type="range"] {
+            flex: 1;
+        }
+
+        .slider-value {
+            font-weight: 600;
+            color: #667eea;
+            min-width: 50px;
+            text-align: right;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            margin: 0 !important;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f44336;
+            color: white;
+            margin-top: 10px;
+        }
+
+        .btn-secondary:hover {
+            background: #d32f2f;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .info-panel {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .info-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            text-align: center;
+        }
+
+        .info-card-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .info-card-value {
+            font-size: 28px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .info-card-label {
+            font-size: 12px;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-idle {
+            background: #e0e0e0;
+            color: #666;
+        }
+
+        .status-streaming {
+            background: #4caf50;
+            color: white;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+
+        .section-title {
+            color: #667eea;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #667eea, transparent);
+            margin: 20px 0;
+        }
+
+        @media (max-width: 1024px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>
+                🎯 ByteTrack Tracking Monitor
+                <span class="status status-idle" id="statusBadge">Idle</span>
+            </h1>
+            <p class="subtitle">Real-time multi-object tracking with ByteTrack algorithm</p>
+        </div>
+
+        <!-- Main Content -->
+        <div class="grid">
+            <!-- Video Panel -->
+            <div class="video-panel">
+                <div class="section-title">
+                    📹 Live Tracking Stream
+                </div>
+                <div class="video-container">
+                    <img id="trackingStream" style="display: none;" alt="Tracking Stream">
+                    <div class="placeholder" id="placeholder">
+                        <div class="placeholder-icon">🎯</div>
+                        <div>Configure settings and click "Start Tracking" to begin</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls Panel -->
+            <div class="controls-panel">
+                <div class="section-title">
+                    ⚙️ Configuration
+                </div>
+
+                <div class="control-group">
+                    <label>Camera URL</label>
+                    <input type="text" id="cameraUrl" value="http://localhost:5069" placeholder="http://192.168.1.100">
+                    <div class="help-text">ESP32-CAM or mock server URL</div>
+                </div>
+
+                <div class="control-group">
+                    <label>Confidence Threshold</label>
+                    <div class="slider-container">
+                        <input type="range" id="confSlider" min="0.1" max="0.9" step="0.05" value="0.25">
+                        <span class="slider-value" id="confValue">0.25</span>
+                    </div>
+                    <div class="help-text">Higher = fewer but more accurate detections</div>
+                </div>
+
+                <div class="control-group">
+                    <label>Target FPS</label>
+                    <div class="slider-container">
+                        <input type="range" id="fpsSlider" min="1" max="30" step="1" value="10">
+                        <span class="slider-value" id="fpsValue">10</span>
+                    </div>
+                    <div class="help-text">Frames processed per second</div>
+                </div>
+
+                <div class="control-group">
+                    <label>Skip Frames</label>
+                    <div class="slider-container">
+                        <input type="range" id="skipSlider" min="1" max="10" step="1" value="1">
+                        <span class="slider-value" id="skipValue">1</span>
+                    </div>
+                    <div class="help-text">Process every Nth frame (1 = all frames)</div>
+                </div>
+
+                <div class="divider"></div>
+
+                <div class="section-title">
+                    🎨 Visualization
+                </div>
+
+                <div class="control-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="showLabels" checked>
+                        <label for="showLabels">Show Track IDs & Labels</label>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="showTrails" checked>
+                        <label for="showTrails">Show Tracking Trails</label>
+                    </div>
+                </div>
+
+                <div class="divider"></div>
+
+                <button class="btn btn-primary" id="startBtn" onclick="startTracking()">
+                    🚀 Start Tracking
+                </button>
+                <button class="btn btn-secondary" id="stopBtn" onclick="stopTracking()" disabled>
+                    ⏹️ Stop Tracking
+                </button>
+            </div>
+        </div>
+
+        <!-- Info Panel -->
+        <div class="info-panel">
+            <div class="section-title">
+                📊 Tracking Statistics
+            </div>
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="info-card-icon">🎯</div>
+                    <div class="info-card-value" id="statTracks">0</div>
+                    <div class="info-card-label">Active Tracks</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">👁️</div>
+                    <div class="info-card-value" id="statDetections">0</div>
+                    <div class="info-card-label">Detections</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">⚡</div>
+                    <div class="info-card-value" id="statFps">0</div>
+                    <div class="info-card-label">FPS</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">📊</div>
+                    <div class="info-card-value" id="statFrames">0</div>
+                    <div class="info-card-label">Frames</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let streamUrl = '';
+        let isStreaming = false;
+
+        // Update slider values
+        document.getElementById('confSlider').addEventListener('input', (e) => {
+            document.getElementById('confValue').textContent = e.target.value;
+        });
+        document.getElementById('fpsSlider').addEventListener('input', (e) => {
+            document.getElementById('fpsValue').textContent = e.target.value;
+        });
+        document.getElementById('skipSlider').addEventListener('input', (e) => {
+            document.getElementById('skipValue').textContent = e.target.value;
+        });
+
+        function startTracking() {
+            const cameraUrl = document.getElementById('cameraUrl').value;
+            const conf = document.getElementById('confSlider').value;
+            const fps = document.getElementById('fpsSlider').value;
+            const skip = document.getElementById('skipSlider').value;
+            const showLabels = document.getElementById('showLabels').checked;
+            const showTrails = document.getElementById('showTrails').checked;
+
+            if (!cameraUrl) {
+                alert('Please enter a camera URL');
+                return;
+            }
+
+            // Build stream URL
+            streamUrl = `http://localhost:8069/stream/tracking?` +
+                `camera_url=${encodeURIComponent(cameraUrl)}` +
+                `&conf=${conf}` +
+                `&fps=${fps}` +
+                `&skip_frames=${skip}` +
+                `&show_labels=${showLabels}` +
+                `&show_trails=${showTrails}`;
+
+            console.log('Starting tracking:', streamUrl);
+
+            // Update UI
+            const streamImg = document.getElementById('trackingStream');
+            const placeholder = document.getElementById('placeholder');
+            const statusBadge = document.getElementById('statusBadge');
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+
+            streamImg.src = streamUrl;
+            streamImg.style.display = 'block';
+            placeholder.style.display = 'none';
+            statusBadge.textContent = 'Streaming';
+            statusBadge.className = 'status status-streaming';
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            isStreaming = true;
+
+            // Mock stats update (in real scenario, these would come from stream metadata)
+            let frameCount = 0;
+            const statsInterval = setInterval(() => {
+                if (!isStreaming) {
+                    clearInterval(statsInterval);
+                    return;
+                }
+                frameCount++;
+                document.getElementById('statFrames').textContent = frameCount;
+                document.getElementById('statFps').textContent = fps;
+                // These would normally come from actual detection data
+                document.getElementById('statTracks').textContent = Math.floor(Math.random() * 5);
+                document.getElementById('statDetections').textContent = Math.floor(Math.random() * 10);
+            }, 1000);
+        }
+
+        function stopTracking() {
+            const streamImg = document.getElementById('trackingStream');
+            const placeholder = document.getElementById('placeholder');
+            const statusBadge = document.getElementById('statusBadge');
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+
+            streamImg.src = '';
+            streamImg.style.display = 'none';
+            placeholder.style.display = 'block';
+            statusBadge.textContent = 'Idle';
+            statusBadge.className = 'status status-idle';
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            isStreaming = false;
+
+            // Reset stats
+            document.getElementById('statTracks').textContent = '0';
+            document.getElementById('statDetections').textContent = '0';
+            document.getElementById('statFps').textContent = '0';
+            document.getElementById('statFrames').textContent = '0';
+        }
+
+        // Handle stream errors
+        document.getElementById('trackingStream').addEventListener('error', () => {
+            console.error('Stream error');
+            alert('Failed to load tracking stream. Check camera URL and server status.');
+            stopTracking();
+        });
+    </script>
+</body>
+</html>
