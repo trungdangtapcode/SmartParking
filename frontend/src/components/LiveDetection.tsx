@@ -1,11 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { aiDetection } from '../services/ai/aiDetection';
-import type { Detection } from '../services/ai/aiDetection';
 import { LiveCamera } from './LiveCamera';
 import { MediaUpload } from './MediaUpload';
 import { ParkingMap2D } from './ParkingMap2D';
 import {
-  saveDetectionRecord,
   fetchDetections,
   deleteAllDetections,
   downloadDetectionsAsJSON,
@@ -14,7 +12,11 @@ import {
   type DetectionRecord,
 } from '../services/detectionService';
 import { getParkingLotsByOwner, getParkingLot } from '../services/parkingLotService';
-import type { ParkingLot } from '../types/parkingLot.types';
+import { getUserESP32Configs } from '../services/esp32ConfigService';
+import { 
+  batchSaveParkingSpaces 
+} from '../services/parkingSpaceService';
+import type { ParkingLot, ParkingSpaceDefinition } from '../types/parkingLot.types';
 import { useAuth } from '../context/AuthContext';
 
 interface LiveDetectionProps {
@@ -104,7 +106,6 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
   const { user, role } = useAuth();
   const ownerId = user?.uid ?? null;
   const isAdmin = role === 'admin';
-  const PARKING_ID_REGEX = /^[A-Za-z0-9]+$/;
   const [spaces, setSpaces] = useState<ParkingSpace[]>([]);
   const [outputImage, setOutputImage] = useState<string>('');
   const [isDetecting, setIsDetecting] = useState(false);
@@ -122,6 +123,10 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
   // Parking lots dropdown
   const [parkingLots, setParkingLots] = useState<ParkingLot[]>([]);
   const [loadingParkingLots, setLoadingParkingLots] = useState(false);
+  
+  // ESP32 cameras dropdown
+  const [cameras, setCameras] = useState<Array<{ id: string; name: string; ipAddress: string }>>([]);
+  const [loadingCameras, setLoadingCameras] = useState(false);
   
   // Other cameras' detections for comparison
   const [otherCamerasDetections, setOtherCamerasDetections] = useState<Array<{
@@ -197,38 +202,29 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
     return result;
   };
 
-  const ensureSnapshotWithinLimit = () => {
-    if (!imageRef.current) {
-      return sourceImageUrl;
-    }
-    if (estimateDataUrlBytes(sourceImageUrl) <= FIRESTORE_FIELD_LIMIT - DATA_URL_MARGIN) {
-      return sourceImageUrl;
-    }
-    const resized = generateSizedSnapshot(imageRef.current, [0.7, 0.6, 0.5, 0.4]);
-    if (resized) {
-      setSourceImageUrl(resized);
-      return resized;
-    }
-    return sourceImageUrl;
-  };
-
-  // Load parking lots on mount
+  // Load parking lots and cameras on mount
   useEffect(() => {
     if (!ownerId) return;
     
-    const loadParkingLots = async () => {
+    const loadData = async () => {
       setLoadingParkingLots(true);
+      setLoadingCameras(true);
       try {
-        const lots = await getParkingLotsByOwner(ownerId);
+        const [lots, cams] = await Promise.all([
+          getParkingLotsByOwner(ownerId),
+          getUserESP32Configs(ownerId)
+        ]);
         setParkingLots(lots);
+        setCameras(cams);
       } catch (error) {
-        console.error('Error loading parking lots:', error);
+        console.error('Error loading data:', error);
       } finally {
         setLoadingParkingLots(false);
+        setLoadingCameras(false);
       }
     };
     
-    loadParkingLots();
+    loadData();
   }, [ownerId]);
 
   // Load other cameras' detections when parking lot or camera changes
@@ -381,6 +377,7 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
   /**
    * PHASE 1: Define Parking Spaces (Tiền xử lý)
    * Run detection ONCE when button is clicked to define parking slot locations
+   * Now saves to unified parkingSpaceDefinitions format
    */
   const handleDetect = async () => {
     if (!videoElement) {
@@ -388,13 +385,27 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
       return;
     }
     
+    if (!activeCameraId || !parkingLotId.trim()) {
+      alert('Please select both Parking Lot and Camera first!');
+      return;
+    }
+    
     setIsDetecting(true);
       
-      try {
+    try {
       // 1. Detect parking spaces (Phase 1: Define slots)
       const detections = await aiDetection.detectParkingSpaces(videoElement);
       
-      // 2. Convert to ParkingSpace format (ignore class, only keep bbox and confidence)
+      // 2. Get image dimensions for normalization
+      const isVideo = videoElement instanceof HTMLVideoElement;
+      const imgWidth = isVideo ? videoElement.videoWidth : videoElement.naturalWidth;
+      const imgHeight = isVideo ? videoElement.videoHeight : videoElement.naturalHeight;
+      
+      if (!imgWidth || !imgHeight) {
+        throw new Error('Cannot get image dimensions');
+      }
+      
+      // 3. Convert to ParkingSpace format (for display/editing)
       const detectedSpaces: ParkingSpace[] = detections.map((d, i) => ({
         id: `space-${Date.now()}-${i}`,
         bbox: d.bbox,
@@ -404,12 +415,12 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
       setSpaces(detectedSpaces);
       saveToHistory(detectedSpaces);
         
-      // 3. Load original image
+      // 4. Load original image
       // Create image snapshot from media (always via canvas) để lưu dạng data URL ổn định
       const img = new Image();
       const sizedSnapshot = generateSizedSnapshot(videoElement);
       if (!sizedSnapshot) {
-        throw new Error('Không tạo được snapshot hình ảnh.');
+        throw new Error('Cannot create image snapshot.');
       }
       img.src = sizedSnapshot;
       
@@ -661,11 +672,11 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
   };
   
   /**
-   * Save final result
+   * Save final result to unified parkingSpaceDefinitions collection
    */
   const handleSave = async () => {
     if (!isAdmin || !ownerId) {
-      alert('Chỉ tài khoản Admin mới có quyền lưu dữ liệu.');
+      alert('Only Admin accounts can save data.');
       return;
     }
     if (spaces.length === 0) {
@@ -676,43 +687,55 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
       alert('Parking Lot ID is required.');
       return;
     }
-    if (!PARKING_ID_REGEX.test(parkingLotId.trim())) {
-      alert('Parking Lot ID chỉ cho phép ký tự chữ và số (không khoảng trắng/ký tự đặc biệt).');
-      return;
-    }
     if (!activeCameraId) {
       alert('Camera ID is required.');
       return;
     }
     
-    const detections: Detection[] = spaces.map(space => ({
-      class: 'parking_space',
-      score: space.confidence,
-      bbox: space.bbox
-    }));
+    if (!imageRef.current) {
+      alert('No image loaded. Please detect spaces first.');
+      return;
+    }
     
-    const safeInputImageUrl = ensureSnapshotWithinLimit();
-
-    const result = await saveDetectionRecord(
-      detections,
-      activeCameraId,
-      safeInputImageUrl,
-      spaces,
-      {
-        ownerId,
-        parkingId: parkingLotId.trim(),
+    try {
+      // Get image dimensions for normalization
+      const imgWidth = imageRef.current.width;
+      const imgHeight = imageRef.current.height;
+      
+      if (!imgWidth || !imgHeight) {
+        throw new Error('Cannot get image dimensions');
       }
-    );
-    
-    if (result.success) {
-      const alertInfo = result.alertsCreated && result.alertsCreated > 0
-        ? ` | 🚨 ${result.alertsCreated} alert(s)`
-        : '';
-      const message = `✅ Saved ${spaces.length} spaces for ${activeCameraId}/${parkingLotId.trim()}${alertInfo}`;
-      setSaveMessage(message);
-      alert(message);
-    } else {
-      alert(`❌ Failed to save: ${result.error || 'Unknown error'}\n\nCheck console for details.`);
+      
+      // Convert SavedSpace (pixel coordinates) to ParkingSpaceDefinition (normalized 0-1)
+      const spaceDefs: Omit<ParkingSpaceDefinition, 'createdAt' | 'updatedAt'>[] = spaces.map((space, index) => {
+        const [x, y, width, height] = space.bbox;
+        
+        return {
+          id: `${activeCameraId}_space_${Date.now()}_${index}`,
+          parkingId: parkingLotId.trim(),
+          cameraId: activeCameraId,
+          name: `P${index + 1}`, // Auto-name as P1, P2, P3...
+          x: x / imgWidth,        // Normalize to 0-1
+          y: y / imgHeight,       // Normalize to 0-1
+          width: width / imgWidth,   // Normalize to 0-1
+          height: height / imgHeight, // Normalize to 0-1
+          createdBy: ownerId,
+        };
+      });
+      
+      // Save to parkingSpaceDefinitions collection (same as Editor)
+      const result = await batchSaveParkingSpaces(spaceDefs);
+      
+      if (result.success) {
+        const message = `✅ Saved ${result.savedCount} parking spaces for ${activeCameraId}/${parkingLotId.trim()}`;
+        setSaveMessage(message);
+        alert(message + '\n\n📝 You can now edit these spaces in the Parking Space Editor page!');
+      } else {
+        alert(`❌ Failed to save: ${result.error || 'Unknown error'}\n\nCheck console for details.`);
+      }
+    } catch (error) {
+      console.error('❌ Save error:', error);
+      alert('❌ Failed to save parking spaces. Check console for details.');
     }
   };
   
@@ -822,29 +845,37 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">
-              Camera ID
+              Camera
             </label>
-            <input
-              type="text"
+            <select
               value={cameraId}
-              onChange={(e) => setCameraId(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase"
-              maxLength={24}
-            />
+              onChange={(e) => setCameraId(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={loadingCameras}
+            >
+              <option value="">-- Select Camera --</option>
+              {cameras.map(cam => (
+                <option key={cam.id} value={cam.id}>
+                  📹 {cam.name}
+                </option>
+              ))}
+            </select>
+            {loadingCameras && (
+              <p className="text-xs text-gray-500 mt-1">Loading cameras...</p>
+            )}
           </div>
         </div>
         <p className="text-xs text-gray-500">
-          ID chỉ gồm chữ cái tiếng Anh và số, không dấu và không khoảng trắng.
+          Select parking lot and camera from your configured devices. AI detection will save spaces to parkingSpaceDefinitions (same as Editor).
         </p>
         {parkingIdError && <p className="text-xs text-red-600">{parkingIdError}</p>}
         <div className="text-sm text-gray-600">
-          Mỗi camera lưu một bản ghi duy nhất trong Firestore theo Parking Lot ID + Camera ID. Khi
-          nhấn <span className="font-semibold">Save Results</span>, hệ thống cập nhật dữ liệu và tự động
-          tạo alert nếu phát hiện xe đỗ sai quy định.
+          When you click <span className="font-semibold">Save Results</span>, parking spaces will be saved to the unified database.
+          You can view and edit them in the <span className="font-semibold">Parking Space Editor</span> page.
         </div>
         {isLoadingSnapshot && (
           <div className="text-xs text-blue-600">
-            Đang tải dữ liệu đã lưu cho camera này...
+            Loading existing data for this camera...
           </div>
         )}
       </div>

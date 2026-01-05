@@ -216,6 +216,79 @@ class AIService:
             "annotatedImage": f"data:image/png;base64,{annotated_b64}",
         }
     
+    async def detect_objects(
+        self,
+        frame: np.ndarray,
+        conf_threshold: float = 0.25,
+        iou_threshold: float = 0.45
+    ) -> list:
+        """
+        Detect objects in a single frame using YOLO
+        
+        Args:
+            frame: OpenCV image (numpy array)
+            conf_threshold: Detection confidence threshold
+            iou_threshold: IOU threshold for NMS
+        
+        Returns:
+            List of detections with format:
+            [
+                {
+                    'class': 'car',
+                    'confidence': 0.85,
+                    'bbox': [x, y, width, height]  # In pixels
+                }
+            ]
+        """
+        if not self.models_loaded:
+            await self.load_models()
+        
+        if frame is None or frame.size == 0:
+            return []
+        
+        try:
+            # Run YOLO prediction
+            results = self.yolo_model.predict(
+                source=frame,
+                conf=conf_threshold,
+                iou=iou_threshold,
+                verbose=False,
+                device=self.device
+            )
+            
+            detections = []
+            
+            # Process results
+            for result in results:
+                boxes = result.boxes
+                
+                for box in boxes:
+                    # Get box coordinates (xyxy format)
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    
+                    # Convert to xywh format
+                    x = float(x1)
+                    y = float(y1)
+                    width = float(x2 - x1)
+                    height = float(y2 - y1)
+                    
+                    # Get class and confidence
+                    cls_id = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    class_name = result.names[cls_id]
+                    
+                    detections.append({
+                        'class': class_name,
+                        'confidence': conf,
+                        'bbox': [x, y, width, height]
+                    })
+            
+            return detections
+            
+        except Exception as e:
+            print(f"❌ Error in detect_objects: {e}")
+            return []
+    
     async def track_objects(
         self,
         video_data: str,
