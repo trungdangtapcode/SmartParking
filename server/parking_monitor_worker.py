@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from services.firebase_service import FirebaseService
 from services.parking_space_service import ParkingSpaceService
 from services.ai_service import AIService
+from services.detection_broadcaster import broadcaster
 
 # Configure logging
 logging.basicConfig(
@@ -249,6 +250,28 @@ class ParkingMonitorWorker:
                 iou_threshold=0.5
             )
             
+            # Draw detections and parking spaces on frame for broadcasting
+            annotated_frame = self.draw_detections_on_frame(
+                frame=frame.copy(),
+                detections=detections,
+                parking_spaces=spaces,
+                space_occupancy=space_occupancy,
+                image_width=image_width,
+                image_height=image_height
+            )
+            
+            # Broadcast annotated frame to viewers
+            await self.broadcast_frame_to_viewers(
+                camera_id=camera_id,
+                frame=annotated_frame,
+                metadata={
+                    "vehicle_count": len(detections),
+                    "occupied_spaces": sum(space_occupancy.values()),
+                    "total_spaces": len(spaces),
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            
             # Update Firebase with occupancy status
             success = self.parking_service.update_space_occupancy(
                 parking_id=parking_id,
@@ -265,6 +288,107 @@ class ParkingMonitorWorker:
             
         except Exception as e:
             logger.error(f"Error processing camera {camera_id}: {e}", exc_info=True)
+    
+    def draw_detections_on_frame(
+        self,
+        frame,
+        detections: List[Dict],
+        parking_spaces: List[Dict],
+        space_occupancy: Dict[str, bool],
+        image_width: int,
+        image_height: int
+    ):
+        """
+        Draw detection boxes and parking spaces on frame
+        
+        Args:
+            frame: OpenCV image (numpy array)
+            detections: List of vehicle detections
+            parking_spaces: List of parking space definitions
+            space_occupancy: Dict mapping space_id to occupied status
+            image_width: Frame width
+            image_height: Frame height
+        
+        Returns:
+            Annotated frame (numpy array)
+        """
+        import cv2
+        import numpy as np
+        
+        # Draw parking spaces
+        for space in parking_spaces:
+            space_id = space['id']
+            is_occupied = space_occupancy.get(space_id, False)
+            
+            # Convert normalized coordinates to pixels
+            coords = space['coordinates']
+            points = []
+            for coord in coords:
+                x = int(coord['x'] * image_width)
+                y = int(coord['y'] * image_height)
+                points.append([x, y])
+            
+            points = np.array(points, dtype=np.int32)
+            
+            # Color: Red if occupied, Green if free
+            color = (0, 0, 255) if is_occupied else (0, 255, 0)
+            
+            # Draw polygon
+            cv2.polylines(frame, [points], isClosed=True, color=color, thickness=2)
+            
+            # Draw label
+            label = f"{space['name']}: {'Occupied' if is_occupied else 'Free'}"
+            cx = int(np.mean([p[0] for p in points]))
+            cy = int(np.mean([p[1] for p in points]))
+            cv2.putText(frame, label, (cx - 50, cy), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.5, color, 1, cv2.LINE_AA)
+        
+        # Draw vehicle detections
+        for detection in detections:
+            bbox = detection['bbox']
+            x, y, w, h = bbox
+            x1, y1 = int(x), int(y)
+            x2, y2 = int(x + w), int(y + h)
+            
+            # Draw bounding box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            
+            # Draw label
+            label = f"{detection.get('class', 'vehicle')}: {detection.get('confidence', 0):.2f}"
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.5, (255, 0, 0), 1, cv2.LINE_AA)
+        
+        return frame
+    
+    async def broadcast_frame_to_viewers(self, camera_id: str, frame, metadata: dict):
+        """
+        Broadcast annotated frame to all connected viewers
+        
+        Args:
+            camera_id: Camera identifier
+            frame: Annotated frame (numpy array)
+            metadata: Frame metadata
+        """
+        import cv2
+        import base64
+        
+        # Check if anyone is watching
+        viewer_count = broadcaster.get_viewer_count(camera_id)
+        if viewer_count == 0:
+            return  # No viewers, skip encoding
+        
+        try:
+            # Encode frame to JPEG
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            frame_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+            # Broadcast to all viewers
+            await broadcaster.broadcast_frame(camera_id, frame_base64, metadata)
+            
+            logger.debug(f"📺 Broadcasted frame to {viewer_count} viewers (camera: {camera_id})")
+        
+        except Exception as e:
+            logger.error(f"Error broadcasting frame: {e}")
     
     async def monitor_loop(self):
         """Main monitoring loop"""

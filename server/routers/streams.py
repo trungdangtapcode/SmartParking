@@ -192,6 +192,7 @@ async def proxy_custom_esp32_stream(
 @router.get("/detect")
 async def stream_with_detection(
     request: Request,
+    camera_url: Optional[str] = Query(None, description="Direct camera URL (e.g., http://192.168.1.100)"),
     conf: float = Query(0.25, description="Confidence threshold"),
     show_labels: bool = Query(True, description="Show detection labels"),
     fps: int = Query(10, description="Target FPS", ge=1, le=30),
@@ -202,14 +203,25 @@ async def stream_with_detection(
     Stream ESP32 with real-time object detection
     🎥 BROADCAST MODE: Uses same frame feed as raw stream (synced frame IDs)
     
-    Performance parameters:
+    Query parameters:
+    - camera_url: Direct camera URL (priority over user_id and default)
+    - conf: Confidence threshold (default 0.25)
+    - show_labels: Show detection labels (default true)
     - fps: Target FPS (default 10, range 1-30)
     - skip_frames: Process every Nth frame (default 2)
+    
+    Usage:
+    - http://localhost:8069/stream/detect?camera_url=http://192.168.1.100
+    - http://localhost:8069/stream/detect?camera_url=http://localhost:8083&fps=15&conf=0.5
     """
-    # Determine which ESP32 URL to use
+    # Determine which ESP32 URL to use (priority: camera_url > user config > default)
     stream_source_url = ESP32_URL
     
-    if user_id and firebase_service:
+    if camera_url:
+        # Direct camera URL parameter takes priority
+        stream_source_url = camera_url
+        print(f"📹 Using provided camera URL: {stream_source_url}")
+    elif user_id and firebase_service:
         try:
             config = await firebase_service.get_user_esp32_config(user_id)
             if config and config.get("esp32_url"):
@@ -217,6 +229,12 @@ async def stream_with_detection(
                 print(f"📹 Using user's ESP32 for detection: {stream_source_url}")
         except Exception as e:
             print(f"⚠️  Could not get user ESP32 config: {e}, using default")
+    
+    if not stream_source_url:
+        raise HTTPException(
+            status_code=400,
+            detail="No camera URL provided. Use camera_url parameter or provide X-User-ID header with configured camera."
+        )
     
     stream_url = f"{stream_source_url}/stream"
     client_id = str(uuid.uuid4())[:8]
