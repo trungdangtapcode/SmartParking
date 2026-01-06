@@ -26,6 +26,12 @@ detection:
   
   # Class filtering (empty = all classes)
   classes: [2, 3, 5, 7]       # 2=car, 3=motorcycle, 5=bus, 7=truck
+
+# Parking Space Occupancy Settings
+parking:
+  iou_threshold: 0.5          # IOU threshold for vehicle-space matching (0.3-0.8)
+  min_overlap_ratio: 0.3      # Minimum overlap ratio to consider occupied (0.2-0.6)
+  confidence_threshold: 0.3   # Minimum detection confidence for occupancy check
   
 # Performance Settings
 performance:

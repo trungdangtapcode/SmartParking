@@ -4,6 +4,7 @@ Modular architecture with separated routers and middleware
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 import os
 import sys
@@ -26,7 +27,7 @@ from services.stream_broadcaster import broadcast_manager
 from esp32_client import ESP32Client
 
 # Import routers
-from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams, detection_viewer, worker_detection_stream, worker_broadcast, detection_logs
+from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams, detection_viewer, worker_detection_stream, worker_broadcast, detection_logs, tracking_debug
 
 # Global instances
 ai_service = None
@@ -127,6 +128,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files directory for serving HTML/CSS/JS files
+static_dir = Path(__file__).parent / "static"
+static_dir.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 # Include all routers
 app.include_router(health.router)
 app.include_router(user_config.router)
@@ -136,6 +142,7 @@ app.include_router(detection_viewer.router)
 app.include_router(worker_detection_stream.router)
 app.include_router(worker_broadcast.router)
 app.include_router(detection_logs.router)
+app.include_router(tracking_debug.router)  # Debug tracking information
 app.include_router(esp32.router)
 app.include_router(ai_detection.router)
 app.include_router(firebase.router)
@@ -147,7 +154,8 @@ if __name__ == "__main__":
     print(f"📹 ESP32-CAM: {ESP32_URL}")
     print(f"🌐 Backend Server: http://localhost:8069")
     print(f"📖 API Docs: http://localhost:8069/docs")
-    print(f"💡 Start ESP32 server: cd ESP32 && python start_mock.py --port 5069")
+    print(f"� Tracking Debug UI: http://localhost:8069/static/tracking_debug.html")
+    print(f"�💡 Start ESP32 server: cd ESP32 && python start_mock.py --port 5069")
     print("=" * 60)
     
     uvicorn.run(

@@ -19,6 +19,7 @@ from services.firebase_service import FirebaseService
 from services.parking_space_service import ParkingSpaceService
 from services.ai_service import AIService
 from services.detection_logger import detection_logger
+from utils.tracking_config import get_tracking_config
 
 # Configure logging
 logging.basicConfig(
@@ -59,7 +60,8 @@ class ParkingMonitorWorker:
         check_interval: float = 0.1,  # Check every 0.1 seconds (10 FPS)
         detection_url: str = "http://localhost:8069",
         update_firebase: bool = False,  # ❌ Disable slow Firebase writes for high FPS
-        enable_logging: bool = True  # ✅ Enable detection logging to .log files
+        enable_logging: bool = True,  # ✅ Enable detection logging to .log files
+        use_tracking: bool = True  # ✅ Enable ByteTrack tracking (vs detection only)
     ):
         """
         Initialize parking monitor worker
@@ -69,11 +71,21 @@ class ParkingMonitorWorker:
             detection_url: URL of the main FastAPI server
             update_firebase: Whether to update Firebase (slow! disables high FPS)
             enable_logging: Whether to log detections to .log files
+            use_tracking: Whether to use ByteTrack tracking (default: True)
         """
         self.check_interval = check_interval
         self.detection_url = detection_url
         self.update_firebase = update_firebase
         self.enable_logging = enable_logging
+        self.use_tracking = use_tracking
+        
+        # Load tracking configuration
+        self.tracking_config = get_tracking_config()
+        if self.use_tracking:
+            logger.info("🎯 ByteTrack tracking ENABLED")
+            self.tracking_config.print_summary()
+        else:
+            logger.info("🔍 Detection only mode (tracking disabled)")
         
         # Initialize services
         self.firebase_service = FirebaseService()
@@ -325,13 +337,13 @@ class ParkingMonitorWorker:
     
     async def detect_vehicles_in_frame(self, image_input) -> List[Dict]:
         """
-        Run YOLO detection on a frame
+        Run YOLO detection or ByteTrack tracking on a frame
         
         Args:
             image_input: Either image bytes or numpy array frame
             
         Returns:
-            List of detections
+            List of detections (with track_id if tracking enabled)
         """
         try:
             import numpy as np
@@ -350,12 +362,33 @@ class ParkingMonitorWorker:
                 # Assume it's already a numpy array
                 frame = image_input
             
-            # Run detection
-            detections = await self.ai_service.detect_objects(frame)
+            # Run detection or tracking based on config
+            if self.use_tracking:
+                # Use ByteTrack tracking
+                detections = await self.ai_service.detect_objects(
+                    frame,
+                    conf_threshold=self.tracking_config.conf_threshold,
+                    iou_threshold=self.tracking_config.iou_threshold,
+                    use_tracking=True  # Enable ByteTrack
+                )
+                logger.debug(f"🎯 Tracked {len(detections)} objects (with track IDs)")
+            else:
+                # Detection only (no tracking)
+                detections = await self.ai_service.detect_objects(
+                    frame,
+                    use_tracking=False
+                )
+                logger.debug(f"🔍 Detected {len(detections)} objects (no tracking)")
             
             # Filter for vehicles only
             vehicle_classes = ['car', 'truck', 'bus', 'motorcycle']
             vehicles = [d for d in detections if d.get('class') in vehicle_classes]
+            
+            # Log track IDs if tracking enabled
+            if self.use_tracking and vehicles:
+                track_ids = [d.get('track_id') for d in vehicles if d.get('track_id') is not None]
+                if track_ids:
+                    logger.debug(f"  Track IDs: {track_ids}")
             
             return vehicles
             
@@ -445,16 +478,62 @@ class ParkingMonitorWorker:
                 image_height=image_height
             )
             
-            # Broadcast annotated frame to viewers
+            # Prepare detailed tracking information for backend
+            tracking_info = {
+                "vehicle_count": len(detections),
+                "occupied_spaces": sum(space_occupancy.values()),
+                "total_spaces": len(spaces),
+                "timestamp": datetime.now().isoformat(),
+                "detections": [
+                    {
+                        "class": det.get('class'),
+                        "confidence": det.get('confidence'),
+                        "bbox": det.get('bbox'),  # [x, y, width, height]
+                        "track_id": det.get('track_id'),  # None if tracking disabled
+                        "center": [
+                            det['bbox'][0] + det['bbox'][2] / 2,
+                            det['bbox'][1] + det['bbox'][3] / 2
+                        ]
+                    }
+                    for det in detections
+                ],
+                "space_occupancy": [
+                    {
+                        "space_id": space['id'],
+                        "space_name": space.get('name', space['id']),
+                        "is_occupied": space_occupancy.get(space['id'], False),
+                        "bbox": {
+                            "x": space['x'],
+                            "y": space['y'],
+                            "width": space['width'],
+                            "height": space['height']
+                        }
+                    }
+                    for space in spaces
+                ],
+                "matched_detections": [
+                    {
+                        "detection": {
+                            "class": det.get('class'),
+                            "confidence": det.get('confidence'),
+                            "bbox": det.get('bbox'),
+                            "track_id": det.get('track_id')
+                        },
+                        "space_id": det.get('parking_space_id'),
+                        "space_name": det.get('parking_space_name'),
+                        "iou": det.get('iou', 0)
+                    }
+                    for det in matched_detections
+                    if det.get('parking_space_id') is not None
+                ],
+                "tracking_enabled": self.use_tracking
+            }
+            
+            # Broadcast annotated frame + tracking info to backend
             await self.broadcast_frame_to_viewers(
                 camera_id=camera_id,
                 frame=annotated_frame,
-                metadata={
-                    "vehicle_count": len(detections),
-                    "occupied_spaces": sum(space_occupancy.values()),
-                    "total_spaces": len(spaces),
-                    "timestamp": datetime.now().isoformat()
-                }
+                metadata=tracking_info
             )
             
             # Log detection results to file (async, non-blocking)
@@ -499,11 +578,11 @@ class ParkingMonitorWorker:
         image_height: int
     ):
         """
-        Draw detection boxes and parking spaces on frame
+        Draw detection boxes, tracking info, and parking spaces on frame
         
         Args:
             frame: OpenCV image (numpy array)
-            detections: List of vehicle detections
+            detections: List of vehicle detections (may include track_id)
             parking_spaces: List of parking space definitions
             space_occupancy: Dict mapping space_id to occupied status
             image_width: Frame width
@@ -514,6 +593,31 @@ class ParkingMonitorWorker:
         """
         import cv2
         import numpy as np
+        
+        # If tracking is enabled, use AI service's draw function for better visualization
+        if self.use_tracking:
+            # Draw detections with tracking trails
+            frame = self.ai_service.draw_detections(
+                frame,
+                detections,
+                show_trails=self.tracking_config.get('visualization.show_trail', True),
+                show_track_id=self.tracking_config.get('visualization.show_track_id', True)
+            )
+        else:
+            # Draw vehicle detections (simple boxes)
+            for detection in detections:
+                bbox = detection['bbox']
+                x, y, w, h = bbox
+                x1, y1 = int(x), int(y)
+                x2, y2 = int(x + w), int(y + h)
+                
+                # Draw bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                
+                # Draw label
+                label = f"{detection.get('class', 'vehicle')}: {detection.get('confidence', 0):.2f}"
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                           0.5, (255, 0, 0), 1, cv2.LINE_AA)
         
         # Draw parking spaces (rectangles from normalized x, y, width, height)
         for space in parking_spaces:
@@ -532,28 +636,19 @@ class ParkingMonitorWorker:
             # Color: Red if occupied, Green if free
             color = (0, 0, 255) if is_occupied else (0, 255, 0)
             
-            # Draw rectangle
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            # Draw rectangle (thicker for better visibility)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
             
-            # Draw label
+            # Draw label with background
             label = f"{space.get('name', space_id)}: {'Occupied' if is_occupied else 'Free'}"
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.5, color, 1, cv2.LINE_AA)
-        
-        # Draw vehicle detections
-        for detection in detections:
-            bbox = detection['bbox']
-            x, y, w, h = bbox
-            x1, y1 = int(x), int(y)
-            x2, y2 = int(x + w), int(y + h)
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
             
-            # Draw bounding box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            # Draw text background
+            cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 6, y1), color, -1)
             
-            # Draw label
-            label = f"{detection.get('class', 'vehicle')}: {detection.get('confidence', 0):.2f}"
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                       0.5, (255, 0, 0), 1, cv2.LINE_AA)
+            # Draw text
+            cv2.putText(frame, label, (x1 + 3, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (255, 255, 255), 2, cv2.LINE_AA)
         
         return frame
     
@@ -649,29 +744,57 @@ class ParkingMonitorWorker:
     
     async def monitor_loop(self):
         """Main monitoring loop"""
-        logger.info("🚀 Starting parking monitor worker...")
+        logger.info("=" * 80)
+        logger.info("🚀 PARKING MONITOR WORKER STARTED")
+        logger.info("=" * 80)
         logger.info(f"⏱️  Target FPS: {int(1/self.min_process_interval)} FPS per camera")
+        logger.info(f"🔥 Firebase updates: {'ENABLED' if self.update_firebase else 'DISABLED (recommended for high FPS)'}")
+        logger.info(f"📝 Detection logging: {'ENABLED' if self.enable_logging else 'DISABLED'}")
+        logger.info(f"🎯 ByteTrack tracking: {'ENABLED' if self.use_tracking else 'DISABLED'}")
+        logger.info(f"🌐 FastAPI server: {self.detection_url}")
+        logger.info(f"🐛 Debug UI: {self.detection_url}/static/tracking_debug.html")
+        logger.info("=" * 80)
         
         self.is_running = True
         currently_processing_cameras: Set[str] = set()
+        loop_count = 0
         
         while self.is_running:
             try:
+                loop_count += 1
+                
+                # Log status every 100 loops
+                if loop_count % 100 == 0:
+                    logger.info(f"📊 Worker alive - Loop #{loop_count} | Processing {len(currently_processing_cameras)} cameras")
+                
                 # Get active cameras (cache this to avoid repeated Firebase calls)
                 active_cameras = await self.get_active_cameras()
                 
                 if not active_cameras:
                     # Clear status for previously processed cameras
                     if currently_processing_cameras:
+                        logger.warning(f"❌ No active cameras found. Clearing status for {len(currently_processing_cameras)} cameras...")
                         await self.clear_worker_status(list(currently_processing_cameras))
                         currently_processing_cameras.clear()
                     
-                    logger.warning("No active cameras found. Waiting...")
+                    if loop_count % 10 == 0:  # Log every 10 loops when no cameras
+                        logger.warning("⚠️  No active cameras with workerEnabled=true. Waiting...")
+                        logger.info("💡 Enable worker in Firebase: parkingLots > cameras > workerEnabled = true")
                     await asyncio.sleep(1.0)  # Wait longer if no cameras
                     continue
                 
-                # Update worker status in Firebase
+                # Log camera info when cameras change
                 camera_ids = [cam['camera_id'] for cam in active_cameras]
+                if set(camera_ids) != currently_processing_cameras:
+                    logger.info("=" * 80)
+                    logger.info(f"📹 PROCESSING {len(active_cameras)} ACTIVE CAMERAS:")
+                    for cam in active_cameras:
+                        logger.info(f"   • {cam['camera_name']} (ID: {cam['camera_id']})")
+                        logger.info(f"     URL: {cam['ip_address']}")
+                    logger.info(f"🐛 View tracking data: {self.detection_url}/static/tracking_debug.html")
+                    logger.info("=" * 80)
+                
+                # Update worker status in Firebase
                 await self.update_worker_status(camera_ids)
                 currently_processing_cameras = set(camera_ids)
                 
@@ -736,6 +859,8 @@ async def main():
                        help='Enable Firebase updates (SLOW! reduces FPS to ~0.3)')
     parser.add_argument('--no-logging', action='store_true', 
                        help='Disable detection logging to .log files')
+    parser.add_argument('--no-tracking', action='store_true', 
+                       help='Disable ByteTrack tracking (detection only)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     
     args = parser.parse_args()
@@ -756,7 +881,8 @@ async def main():
         check_interval=check_interval,
         detection_url=args.detection_url,
         update_firebase=args.update_firebase,
-        enable_logging=not args.no_logging
+        enable_logging=not args.no_logging,
+        use_tracking=not args.no_tracking
     )
     
     try:

@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tracking Debug Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+        }
+        
+        .controls {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .controls label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .controls input, .controls select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        
+        .controls button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .controls button:hover {
+            transform: translateY(-2px);
+        }
+        
+        .controls button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        .status.connected {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .status.disconnected {
+            background: #f44336;
+            color: white;
+        }
+        
+        .panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        @media (max-width: 1024px) {
+            .panels {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .panel h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            padding: 15px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #667eea22 0%, #764ba244 100%);
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #333;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50, #8bc34a);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+        
+        .detections-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .detection-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            background: #f5f5f5;
+            border-left: 4px solid #667eea;
+        }
+        
+        .detection-item strong {
+            color: #667eea;
+        }
+        
+        .space-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+        }
+        
+        .space-item {
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 600;
+        }
+        
+        .space-item.occupied {
+            background: #ffebee;
+            color: #c62828;
+            border: 2px solid #ef5350;
+        }
+        
+        .space-item.available {
+            background: #e8f5e9;
+            color: #2e7d32;
+            border: 2px solid #66bb6a;
+        }
+        
+        .track-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .track-badge {
+            padding: 8px 12px;
+            background: #667eea;
+            color: white;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: monospace;
+        }
+        
+        .matched-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .matched-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+        }
+        
+        .json-viewer {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            max-height: 500px;
+            overflow: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .json-key {
+            color: #9cdcfe;
+        }
+        
+        .json-string {
+            color: #ce9178;
+        }
+        
+        .json-number {
+            color: #b5cea8;
+        }
+        
+        .json-boolean {
+            color: #569cd6;
+        }
+        
+        .timestamp {
+            color: #999;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🔍 Tracking Debug Viewer</h1>
+            <p>Real-time tracking information and vehicle detection debugging</p>
+            <div class="status disconnected" id="connectionStatus">🔴 Disconnected</div>
+        </div>
+        
+        <!-- Controls -->
+        <div class="controls">
+            <label for="cameraSelect">Select Camera:</label>
+            <select id="cameraSelect" onchange="updateCameraIdInput()">
+                <option value="">Loading cameras...</option>
+            </select>
+            
+            <label for="cameraId">Camera ID:</label>
+            <input type="text" id="cameraId" placeholder="Enter camera ID or select from dropdown" value="">
+            
+            <button id="connectBtn" onclick="connect()">Connect to Debug Stream</button>
+            <button id="refreshBtn" onclick="loadAvailableCameras()" style="margin-top: 10px; background: #4caf50;">🔄 Refresh Camera List</button>
+            <button id="parkingAnalysisBtn" onclick="showParkingAnalysis()" style="margin-top: 10px; background: #ff9800;">🅿️ Parking Lot Analysis</button>
+        </div>
+        
+        <!-- Parking Lot Analysis Panel (Hidden by default) -->
+        <div class="panel" id="parkingAnalysisPanel" style="display: none;">
+            <h2>🅿️ Parking Lot Analysis</h2>
+            <div id="parkingAnalysisContent">
+                <p style="color: #999;">Click "Parking Lot Analysis" to load data</p>
+            </div>
+        </div>
+        
+        <!-- Summary Statistics -->
+        <div class="panels">
+            <div class="panel">
+                <h2>📊 Summary Statistics</h2>
+                <div class="stat-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Vehicles</div>
+                        <div class="stat-value" id="vehicleCount">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Occupied</div>
+                        <div class="stat-value" id="occupiedSpaces">0 / 0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Tracked</div>
+                        <div class="stat-value" id="trackedCount">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Tracking</div>
+                        <div class="stat-value" id="trackingEnabled">❌</div>
+                    </div>
+                </div>
+                
+                <h3 style="margin: 20px 0 10px 0;">Occupancy Rate</h3>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="occupancyBar" style="width: 0%">0%</div>
+                </div>
+                
+                <h3 style="margin: 20px 0 10px 0;">Vehicles by Type</h3>
+                <div id="vehicleTypes"></div>
+            </div>
+            
+            <!-- Active Track IDs -->
+            <div class="panel">
+                <h2>🎯 Active Track IDs</h2>
+                <div class="track-badges" id="trackBadges">
+                    <span style="color: #999;">No active tracks</span>
+                </div>
+                
+                <h3 style="margin: 20px 0 10px 0;">Occupied Spaces</h3>
+                <div id="occupiedSpaceNames"></div>
+                
+                <h3 style="margin: 20px 0 10px 0;">Available Spaces</h3>
+                <div id="availableSpaceNames"></div>
+            </div>
+        </div>
+        
+        <!-- Detections -->
+        <div class="panels">
+            <div class="panel">
+                <h2>🚗 Vehicle Detections</h2>
+                <div class="detections-list" id="detectionsList">
+                    <p style="color: #999;">No detections yet</p>
+                </div>
+            </div>
+            
+            <!-- Parking Spaces -->
+            <div class="panel">
+                <h2>🅿️ Parking Spaces</h2>
+                <div class="space-grid" id="spaceGrid">
+                    <p style="color: #999;">No spaces defined</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Matched Detections -->
+        <div class="panel">
+            <h2>🔗 Vehicle-Space Associations</h2>
+            <div class="matched-list" id="matchedList">
+                <p style="color: #999;">No matched detections</p>
+            </div>
+        </div>
+        
+        <!-- Raw JSON Data -->
+        <div class="panel">
+            <h2>📋 Raw JSON Data</h2>
+            <div class="json-viewer" id="jsonViewer">
+                <pre>Waiting for data...</pre>
+            </div>
+            <div class="timestamp" id="timestamp"></div>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        let reconnectInterval = null;
+        let availableCameras = [];
+        
+        // Load available cameras on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            loadAvailableCameras();
+        });
+        
+        async function loadAvailableCameras() {
+            const selectElement = document.getElementById('cameraSelect');
+            const refreshBtn = document.getElementById('refreshBtn');
+            
+            try {
+                selectElement.innerHTML = '<option value="">Loading cameras...</option>';
+                refreshBtn.disabled = true;
+                
+                const response = await fetch('/debug/active-cameras');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                availableCameras = data.cameras || [];
+                
+                if (availableCameras.length === 0) {
+                    selectElement.innerHTML = '<option value="">No active cameras found</option>';
+                    console.warn('⚠️ No active cameras with workerEnabled=true');
+                } else {
+                    selectElement.innerHTML = '<option value="">-- Select a camera --</option>';
+                    availableCameras.forEach(cam => {
+                        const option = document.createElement('option');
+                        option.value = cam.camera_id;
+                        option.textContent = `${cam.camera_name || cam.camera_id} (${cam.parking_id})`;
+                        selectElement.appendChild(option);
+                    });
+                    
+                    console.log(`✅ Loaded ${availableCameras.length} cameras:`, availableCameras);
+                    
+                    // Auto-select first camera if none is selected
+                    if (!document.getElementById('cameraId').value) {
+                        selectElement.selectedIndex = 1; // Select first camera
+                        updateCameraIdInput();
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Failed to load cameras:', error);
+                selectElement.innerHTML = '<option value="">Failed to load cameras</option>';
+                alert('Failed to load cameras. Make sure the FastAPI server is running on port 8069.');
+            } finally {
+                refreshBtn.disabled = false;
+            }
+        }
+        
+        function updateCameraIdInput() {
+            const selectElement = document.getElementById('cameraSelect');
+            const inputElement = document.getElementById('cameraId');
+            
+            if (selectElement.value) {
+                inputElement.value = selectElement.value;
+                
+                // Find camera info
+                const camera = availableCameras.find(c => c.camera_id === selectElement.value);
+                if (camera) {
+                    console.log('📹 Selected camera:', camera.camera_name, '|', camera.camera_id);
+                }
+            }
+        }
+        
+        function connect() {
+            const cameraId = document.getElementById('cameraId').value.trim();
+            if (!cameraId) {
+                alert('Please enter a camera ID');
+                return;
+            }
+            
+            // Close existing connection
+            if (ws) {
+                ws.close();
+            }
+            
+            // Connect to WebSocket
+            const wsUrl = `ws://localhost:8069/debug/ws/tracking/${cameraId}`;
+            console.log('Connecting to:', wsUrl);
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('✅ Connected to debug stream');
+                document.getElementById('connectionStatus').textContent = '🟢 Connected';
+                document.getElementById('connectionStatus').className = 'status connected';
+                document.getElementById('connectBtn').textContent = 'Disconnect';
+                document.getElementById('connectBtn').onclick = disconnect;
+                
+                // Start sending ping every 10 seconds
+                reconnectInterval = setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send('ping');
+                    }
+                }, 10000);
+            };
+            
+            ws.onmessage = (event) => {
+                if (event.data === 'keepalive' || event.data === 'pong') {
+                    console.log('💓 Keepalive received');
+                    return;
+                }
+                
+                try {
+                    const message = JSON.parse(event.data);
+                    if (message.type === 'tracking_data') {
+                        updateUI(message);
+                    }
+                } catch (error) {
+                    console.error('Failed to parse message:', error);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('❌ WebSocket error:', error);
+            };
+            
+            ws.onclose = () => {
+                console.log('🔌 Connection closed');
+                document.getElementById('connectionStatus').textContent = '🔴 Disconnected';
+                document.getElementById('connectionStatus').className = 'status disconnected';
+                document.getElementById('connectBtn').textContent = 'Connect to Debug Stream';
+                document.getElementById('connectBtn').onclick = connect;
+                
+                if (reconnectInterval) {
+                    clearInterval(reconnectInterval);
+                }
+            };
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function updateUI(message) {
+            const data = message.data;
+            const summary = data.summary;
+            const stats = data.statistics;
+            
+            // Update summary statistics
+            document.getElementById('vehicleCount').textContent = summary.vehicle_count;
+            document.getElementById('occupiedSpaces').textContent = 
+                `${summary.occupied_spaces} / ${summary.total_spaces}`;
+            document.getElementById('trackedCount').textContent = stats.tracked_vehicle_count;
+            document.getElementById('trackingEnabled').textContent = 
+                summary.tracking_enabled ? '✅' : '❌';
+            
+            // Update occupancy rate
+            const occupancyRate = (summary.occupancy_rate * 100).toFixed(1);
+            document.getElementById('occupancyBar').style.width = occupancyRate + '%';
+            document.getElementById('occupancyBar').textContent = occupancyRate + '%';
+            
+            // Update vehicle types
+            const vehicleTypesHTML = Object.entries(stats.vehicles_by_type)
+                .map(([type, count]) => `<div class="detection-item">${type}: ${count}</div>`)
+                .join('');
+            document.getElementById('vehicleTypes').innerHTML = 
+                vehicleTypesHTML || '<p style="color: #999;">No vehicles detected</p>';
+            
+            // Update track IDs
+            const trackBadgesHTML = stats.track_ids.length > 0
+                ? stats.track_ids.map(id => `<span class="track-badge">#${id}</span>`).join('')
+                : '<span style="color: #999;">No active tracks</span>';
+            document.getElementById('trackBadges').innerHTML = trackBadgesHTML;
+            
+            // Update occupied/available space names
+            document.getElementById('occupiedSpaceNames').innerHTML = 
+                stats.occupied_space_names.length > 0
+                    ? stats.occupied_space_names.map(name => `<div class="detection-item">${name}</div>`).join('')
+                    : '<p style="color: #999;">No occupied spaces</p>';
+            
+            document.getElementById('availableSpaceNames').innerHTML = 
+                stats.available_space_names.length > 0
+                    ? stats.available_space_names.map(name => `<div class="detection-item">${name}</div>`).join('')
+                    : '<p style="color: #999;">No available spaces</p>';
+            
+            // Update detections list
+            const detectionsHTML = data.detections.map(det => `
+                <div class="detection-item">
+                    <strong>Track #${det.track_id || 'N/A'}</strong> - ${det.class}
+                    <br>Confidence: ${(det.confidence * 100).toFixed(1)}%
+                    <br>BBox: [${det.bbox.map(v => v.toFixed(0)).join(', ')}]
+                    <br>Center: [${det.center.map(v => v.toFixed(0)).join(', ')}]
+                </div>
+            `).join('');
+            document.getElementById('detectionsList').innerHTML = 
+                detectionsHTML || '<p style="color: #999;">No detections yet</p>';
+            
+            // Update space grid
+            const spacesHTML = data.space_occupancy.map(space => `
+                <div class="space-item ${space.is_occupied ? 'occupied' : 'available'}">
+                    ${space.space_name}
+                    <br><small>${space.is_occupied ? 'Occupied' : 'Available'}</small>
+                </div>
+            `).join('');
+            document.getElementById('spaceGrid').innerHTML = 
+                spacesHTML || '<p style="color: #999;">No spaces defined</p>';
+            
+            // Update matched detections
+            const matchedHTML = data.matched_detections.map(match => `
+                <div class="matched-item">
+                    <strong>Track #${match.detection.track_id}</strong> → ${match.space_id}
+                    <br>${match.detection.class} (${(match.detection.confidence * 100).toFixed(1)}%)
+                </div>
+            `).join('');
+            document.getElementById('matchedList').innerHTML = 
+                matchedHTML || '<p style="color: #999;">No matched detections</p>';
+            
+            // Update raw JSON
+            document.getElementById('jsonViewer').innerHTML = 
+                `<pre>${JSON.stringify(message, null, 2)}</pre>`;
+            document.getElementById('timestamp').textContent = 
+                `Last update: ${new Date(message.timestamp).toLocaleString()}`;
+        }
+        
+        async function showParkingAnalysis() {
+            const panel = document.getElementById('parkingAnalysisPanel');
+            const content = document.getElementById('parkingAnalysisContent');
+            const btn = document.getElementById('parkingAnalysisBtn');
+            
+            try {
+                btn.disabled = true;
+                btn.textContent = '⏳ Loading...';
+                content.innerHTML = '<p style="color: #999;">Loading parking lot analysis...</p>';
+                panel.style.display = 'block';
+                
+                // Get selected camera's parking lot ID
+                const selectElement = document.getElementById('cameraSelect');
+                const selectedCamera = availableCameras.find(c => c.camera_id === selectElement.value);
+                
+                if (!selectedCamera || !selectedCamera.parking_id) {
+                    content.innerHTML = '<p style="color: #f44336;">Please select a camera first</p>';
+                    return;
+                }
+                
+                const parkingId = selectedCamera.parking_id;
+                
+                // Fetch parking lot analysis
+                const response = await fetch(`/debug/parking-lot-analysis/${parkingId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const analysis = await response.json();
+                
+                if (analysis.error) {
+                    content.innerHTML = `<p style="color: #f44336;">Error: ${analysis.error}</p>`;
+                    return;
+                }
+                
+                // Display analysis
+                const occupancyPercent = analysis.occupancy_rate || 0;
+                const occupancyColor = occupancyPercent > 80 ? '#f44336' : 
+                                       occupancyPercent > 50 ? '#ff9800' : '#4caf50';
+                
+                let html = `
+                    <div style="margin-bottom: 20px;">
+                        <h3>Parking Lot: ${parkingId}</h3>
+                        <p style="color: #999; font-size: 14px;">Last updated: ${new Date(analysis.timestamp).toLocaleString()}</p>
+                    </div>
+                    
+                    <div class="stat-grid" style="margin-bottom: 20px;">
+                        <div class="stat-card">
+                            <div class="stat-label">Total Spaces</div>
+                            <div class="stat-value">${analysis.total_spaces}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Occupied</div>
+                            <div class="stat-value" style="color: #f44336;">${analysis.occupied_spaces}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Available</div>
+                            <div class="stat-value" style="color: #4caf50;">${analysis.available_spaces}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Occupancy</div>
+                            <div class="stat-value" style="color: ${occupancyColor};">${occupancyPercent.toFixed(1)}%</div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h4>Configuration</h4>
+                        <p style="font-size: 14px; color: #666;">
+                            IOU Threshold: ${analysis.config.iou_threshold} | 
+                            Min Overlap: ${analysis.config.min_overlap_ratio} | 
+                            Confidence: ${analysis.config.confidence_threshold}
+                        </p>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h4>Occupied Spaces (${analysis.occupied_spaces})</h4>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                `;
+                
+                const occupiedSpaces = analysis.spaces.filter(s => s.is_occupied);
+                if (occupiedSpaces.length > 0) {
+                    occupiedSpaces.forEach(space => {
+                        const vehicle = space.occupying_vehicle;
+                        html += `
+                            <div style="padding: 12px; margin-bottom: 8px; background: #ffebee; border-left: 4px solid #f44336; border-radius: 4px;">
+                                <strong>${space.space_name}</strong> (${space.space_id.substring(0, 8)}...)
+                                <br><span style="color: #666; font-size: 14px;">
+                                    Vehicle: ${vehicle.class} | 
+                                    Confidence: ${(vehicle.confidence * 100).toFixed(1)}% | 
+                                    ${vehicle.track_id ? `Track ID: ${vehicle.track_id} | ` : ''}
+                                    IOU: ${(vehicle.iou * 100).toFixed(1)}%
+                                </span>
+                            </div>
+                        `;
+                    });
+                } else {
+                    html += '<p style="color: #999;">No occupied spaces</p>';
+                }
+                
+                html += `
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h4>Available Spaces (${analysis.available_spaces})</h4>
+                        <div style="max-height: 200px; overflow-y: auto;">
+                `;
+                
+                const availableSpaces = analysis.spaces.filter(s => !s.is_occupied);
+                if (availableSpaces.length > 0) {
+                    availableSpaces.forEach(space => {
+                        html += `
+                            <div style="padding: 8px; margin-bottom: 6px; background: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 4px;">
+                                <strong>${space.space_name}</strong>
+                                <span style="color: #666; font-size: 12px; margin-left: 8px;">(${space.space_id.substring(0, 8)}...)</span>
+                            </div>
+                        `;
+                    });
+                } else {
+                    html += '<p style="color: #999;">No available spaces</p>';
+                }
+                
+                html += `
+                        </div>
+                    </div>
+                `;
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Failed to load parking analysis:', error);
+                content.innerHTML = `<p style="color: #f44336;">Failed to load parking analysis: ${error.message}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🅿️ Parking Lot Analysis';
+            }
+        }
+        
+        // Auto-connect on page load if camera ID is provided
+        window.onload = () => {
+            const cameraId = document.getElementById('cameraId').value.trim();
+            if (cameraId) {
+                // Wait a moment for the page to fully render
+                setTimeout(connect, 500);
+            }
+        };
+    </script>
+</body>
+</html>
