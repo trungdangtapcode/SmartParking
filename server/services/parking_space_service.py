@@ -87,6 +87,55 @@ class ParkingSpaceService:
         iou = intersection_area / union_area
         return iou
     
+    def calculate_ioa(
+        self,
+        detection_box: Dict[str, float],
+        parking_box: Dict[str, float],
+        mode: str = 'detection'
+    ) -> float:
+        """
+        Calculate Intersection over Area (IoA) - better for parking occupancy detection
+        
+        This calculates the ratio of intersection area to either:
+        - detection box area (mode='detection'): What % of the car is in the parking space?
+        - parking box area (mode='parking'): What % of the parking space is occupied?
+        
+        Args:
+            detection_box: Vehicle detection box {x, y, width, height} (normalized 0-1)
+            parking_box: Parking space box {x, y, width, height} (normalized 0-1)
+            mode: 'detection' (intersection/detection_area) or 'parking' (intersection/parking_area)
+            
+        Returns:
+            IoA value between 0 and 1
+        """
+        # Calculate intersection
+        x1 = max(detection_box['x'], parking_box['x'])
+        y1 = max(detection_box['y'], parking_box['y'])
+        x2 = min(detection_box['x'] + detection_box['width'], parking_box['x'] + parking_box['width'])
+        y2 = min(detection_box['y'] + detection_box['height'], parking_box['y'] + parking_box['height'])
+        
+        intersection_width = max(0, x2 - x1)
+        intersection_height = max(0, y2 - y1)
+        intersection_area = intersection_width * intersection_height
+        
+        # Calculate base area depending on mode
+        if mode == 'detection':
+            # What % of the detected vehicle is inside the parking space?
+            base_area = detection_box['width'] * detection_box['height']
+        elif mode == 'parking':
+            # What % of the parking space is covered by the vehicle?
+            base_area = parking_box['width'] * parking_box['height']
+        else:
+            raise ValueError(f"Invalid mode: {mode}. Must be 'detection' or 'parking'")
+        
+        # Avoid division by zero
+        if base_area == 0:
+            return 0.0
+        
+        # Calculate IoA
+        ioa = intersection_area / base_area
+        return ioa
+    
     def convert_detection_to_normalized(
         self,
         detection: Dict,
@@ -109,30 +158,49 @@ class ParkingSpaceService:
         # Handle different bbox formats
         if len(bbox) == 4:
             # Check if format is [x1, y1, x2, y2] or [x, y, w, h]
+            # If x2 > x1 and y2 > y1, it's likely [x1, y1, x2, y2]
+            # Otherwise it's [x, y, w, h]
+            
+            # Try to detect format
             if bbox[2] > bbox[0] and bbox[3] > bbox[1]:
-                # Likely [x1, y1, x2, y2]
+                # Likely [x1, y1, x2, y2] format
                 x1, y1, x2, y2 = bbox
                 x = x1 / image_width
                 y = y1 / image_height
                 width = (x2 - x1) / image_width
                 height = (y2 - y1) / image_height
             else:
-                # Likely [x, y, w, h]
+                # Likely [x, y, w, h] format
                 x, y, w, h = bbox
                 x = x / image_width
                 y = y / image_height
                 width = w / image_width
                 height = h / image_height
+        elif isinstance(bbox, dict):
+            # Handle dict format
+            if 'x1' in bbox:
+                x = bbox['x1'] / image_width
+                y = bbox['y1'] / image_height
+                width = (bbox['x2'] - bbox['x1']) / image_width
+                height = (bbox['y2'] - bbox['y1']) / image_height
+            elif 'x' in bbox:
+                x = bbox['x'] / image_width
+                y = bbox['y'] / image_height
+                width = bbox['width'] / image_width
+                height = bbox['height'] / image_height
+            else:
+                return None
         else:
-            print(f"⚠️  Invalid bbox format: {bbox}")
-            return {'x': 0, 'y': 0, 'width': 0, 'height': 0}
+            return None
         
-        return {
+        result = {
             'x': max(0, min(1, x)),
             'y': max(0, min(1, y)),
             'width': max(0, min(1, width)),
             'height': max(0, min(1, height))
         }
+        
+        return result
     
     def match_detections_to_spaces(
         self,
@@ -140,7 +208,10 @@ class ParkingSpaceService:
         parking_spaces: List[Dict],
         image_width: int,
         image_height: int,
-        iou_threshold: float = 0.5
+        iou_threshold: float = 0.5,
+        use_ioa: bool = True,
+        ioa_mode: str = 'detection',
+        verbose: bool = False  # Only show detailed logs if True
     ) -> Tuple[List[Dict], Dict[str, bool]]:
         """
         Match vehicle detections to parking spaces
@@ -150,25 +221,51 @@ class ParkingSpaceService:
             parking_spaces: List of parking space definitions
             image_width: Image width in pixels
             image_height: Image height in pixels
-            iou_threshold: Minimum IoU to consider a match (default 0.5)
+            iou_threshold: Minimum IoU/IoA to consider a match (default 0.5)
+            use_ioa: If True, use IoA (Intersection over Area) instead of IoU (default: True)
+            ioa_mode: 'detection' (% of car in space) or 'parking' (% of space occupied)
+            verbose: If True, show detailed matching logs (default: False)
             
         Returns:
             Tuple of:
             - List of matched detections with added 'parking_space_id' field
             - Dict mapping space_id to occupancy status (True=occupied, False=available)
         """
+        metric_name = f"IoA-{ioa_mode}" if use_ioa else "IoU"
+        
+        if verbose:
+            print(f"\n{'='*80}")
+            print(f"🔍 MATCHING {len(detections)} DETECTIONS TO {len(parking_spaces)} SPACES")
+            print(f"📐 Image size: {image_width}x{image_height}")
+            print(f"🎯 Threshold: {iou_threshold}")
+            print(f"📊 Metric: {metric_name}")
+            if use_ioa:
+                if ioa_mode == 'detection':
+                    print(f"    (What % of detected vehicle is inside parking space?)")
+                else:
+                    print(f"    (What % of parking space is occupied by vehicle?)")
+            print(f"{'='*80}\n")
+        
         # Initialize all spaces as available
         space_occupancy = {space['id']: False for space in parking_spaces}
         matched_detections = []
         
-        for detection in detections:
+        # Track statistics
+        num_with_overlap = 0  # Detections that overlap with at least one space
+        num_matched = 0  # Detections that meet threshold
+        
+        for det_idx, detection in enumerate(detections):
             # Convert detection to normalized coordinates
             det_box = self.convert_detection_to_normalized(
                 detection, image_width, image_height
             )
             
+            if det_box is None:
+                continue
+            
             best_match = None
-            best_iou = 0
+            best_score = 0
+            has_overlap = False
             
             # Find best matching parking space
             for space in parking_spaces:
@@ -179,23 +276,37 @@ class ParkingSpaceService:
                     'height': space['height']
                 }
                 
-                iou = self.calculate_iou(det_box, space_box)
+                # Calculate overlap metric (IoU or IoA)
+                if use_ioa:
+                    score = self.calculate_ioa(det_box, space_box, mode=ioa_mode)
+                else:
+                    score = self.calculate_iou(det_box, space_box)
                 
-                if iou > best_iou and iou >= iou_threshold:
-                    best_iou = iou
+                if score > 0:
+                    has_overlap = True
+                
+                if score > best_score:
+                    best_score = score
                     best_match = space
+            
+            # Update statistics
+            if has_overlap:
+                num_with_overlap += 1
             
             # Add match info to detection
             detection_copy = detection.copy()
-            if best_match:
+            if best_match and best_score >= iou_threshold:
+                num_matched += 1
                 detection_copy['parking_space_id'] = best_match['id']
                 detection_copy['parking_space_name'] = best_match['name']
-                detection_copy['iou'] = best_iou
+                detection_copy['iou'] = best_score
+                detection_copy['metric'] = metric_name
                 space_occupancy[best_match['id']] = True
             else:
                 detection_copy['parking_space_id'] = None
                 detection_copy['parking_space_name'] = None
-                detection_copy['iou'] = 0
+                detection_copy['iou'] = best_score
+                detection_copy['metric'] = metric_name
             
             matched_detections.append(detection_copy)
         

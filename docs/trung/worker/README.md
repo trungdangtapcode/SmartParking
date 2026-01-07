@@ -109,6 +109,29 @@ This folder contains comprehensive documentation about the real-time vehicle tra
 
 ---
 
+### 5. [PARKING_LOT_ANALYSIS.md](./PARKING_LOT_ANALYSIS.md)
+**Parking lot occupancy analysis service with IOU-based space matching**
+
+**Topics Covered:**
+- Parking space occupancy detection
+- IOU (Intersection over Union) matching algorithm
+- Configuration parameters (thresholds)
+- API endpoints for analysis
+- Debug UI integration
+- Business logic examples
+- Performance considerations
+- Firestore data structure
+
+**Best For:**
+- Understanding parking occupancy detection
+- Configuring IOU thresholds
+- Finding empty/occupied spaces
+- Building parking guidance features
+- Analyzing parking lot statistics
+- Tuning detection accuracy
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Start the Worker (Backend)

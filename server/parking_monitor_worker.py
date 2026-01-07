@@ -318,21 +318,25 @@ class ParkingMonitorWorker:
                 base_url = camera_url.rstrip('/')
                 capture_url = f'{base_url}/capture'
                 
-                logger.debug(f"Fetching frame from: {capture_url}")
+                logger.debug(f"  → Requesting: {capture_url}")
                 
                 async with session.get(capture_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
                         image_bytes = await response.read()
-                        logger.debug(f"Fetched {len(image_bytes)} bytes from camera")
+                        logger.debug(f"  ✅ Fetched {len(image_bytes)} bytes")
                         return image_bytes
                     else:
-                        logger.warning(f"Failed to fetch frame from {capture_url}: HTTP {response.status}")
+                        logger.error(f"  ❌ HTTP {response.status} from {capture_url}")
                         return None
         except asyncio.TimeoutError:
-            logger.error(f"Timeout fetching frame from {camera_url}")
+            logger.error(f"  ⏱️  Timeout (10s) fetching from {camera_url}")
+            return None
+        except aiohttp.ClientConnectorError as e:
+            logger.error(f"  ❌ Connection error to {camera_url}: {e}")
+            logger.error(f"     Is the ESP32 server running on this port?")
             return None
         except Exception as e:
-            logger.error(f"Error fetching frame from {camera_url}: {e}")
+            logger.error(f"  ❌ Error fetching from {camera_url}: {type(e).__name__}: {e}")
             return None
     
     async def detect_vehicles_in_frame(self, image_input) -> List[Dict]:
@@ -406,6 +410,7 @@ class ParkingMonitorWorker:
         camera_id = camera_info['camera_id']
         parking_id = camera_info['parking_id']
         camera_url = camera_info['ip_address']
+        camera_name = camera_info.get('camera_name', camera_id)
         
         try:
             # Rate limiting: skip if processed too recently
@@ -419,27 +424,22 @@ class ParkingMonitorWorker:
             
             self.last_processed[camera_id] = current_time
             
-            logger.debug(f"Processing camera: {camera_info['camera_name']} ({camera_id})")
-
-            
             # Get parking spaces for this camera (use cache)
             if camera_id not in self.camera_spaces_cache:
                 spaces = self.parking_service.get_parking_spaces_by_camera(camera_id)
                 self.camera_spaces_cache[camera_id] = spaces
-                logger.info(f"✅ Loaded {len(spaces)} parking spaces for camera {camera_id}")
             else:
                 spaces = self.camera_spaces_cache[camera_id]
             
             if not spaces:
-                logger.warning(f"No parking spaces defined for camera {camera_id}")
-                # Send an info message to UI about missing parking spaces
+                logger.warning(f"⚠️ {camera_name:<25} | No parking spaces defined")
                 await self.broadcast_no_spaces_message(camera_id, camera_info.get('camera_name', camera_id))
                 return
             
             # Fetch frame from camera
             frame_bytes = await self.fetch_camera_frame(camera_url)
             if not frame_bytes:
-                logger.warning(f"Could not fetch frame from {camera_url}")
+                logger.error(f"❌ {camera_name:<25} | Could not fetch frame (check ESP32)")
                 return
             
             # Decode image first to check if valid
@@ -449,15 +449,13 @@ class ParkingMonitorWorker:
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             
             if frame is None:
-                logger.error(f"Failed to decode image from {camera_url} - invalid image data")
+                logger.error(f"❌ {camera_name:<25} | Invalid image data")
                 return
             
             image_height, image_width = frame.shape[:2]
-            logger.debug(f"Frame dimensions: {image_width}x{image_height}")
             
             # Detect vehicles (pass the decoded frame, not bytes)
             detections = await self.detect_vehicles_in_frame(frame)
-            logger.debug(f"🚗 Detected {len(detections)} vehicles in camera {camera_id}")
             
             # Match detections to parking spaces
             matched_detections, space_occupancy = self.parking_service.match_detections_to_spaces(
@@ -465,8 +463,17 @@ class ParkingMonitorWorker:
                 parking_spaces=spaces,
                 image_width=image_width,
                 image_height=image_height,
-                iou_threshold=0.5
+                iou_threshold=0.3,  # Lower threshold works better with IoA
+                use_ioa=True,  # ✅ Use IoA instead of IoU
+                ioa_mode='detection'  # What % of car is in parking space?
             )
+            
+            # Beautiful aligned log
+            num_vehicles = len(detections)
+            occupied = sum(space_occupancy.values())
+            total_spaces = len(space_occupancy)
+            
+            logger.info(f"📹 {camera_name:<25} | {num_vehicles:2d} vehicles | {occupied:2d}/{total_spaces:2d} occupied")
             
             # Draw detections and parking spaces on frame for broadcasting
             annotated_frame = self.draw_detections_on_frame(
@@ -791,6 +798,7 @@ class ParkingMonitorWorker:
                     for cam in active_cameras:
                         logger.info(f"   • {cam['camera_name']} (ID: {cam['camera_id']})")
                         logger.info(f"     URL: {cam['ip_address']}")
+                        logger.info(f"     Parking: {cam['parking_id']}")
                     logger.info(f"🐛 View tracking data: {self.detection_url}/static/tracking_debug.html")
                     logger.info("=" * 80)
                 

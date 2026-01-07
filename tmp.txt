@@ -1,0 +1,4 @@
+export PATH="$HOME/.pyenv/bin:$PATH"
+
+
+YES, I LOVE idea using tab symbol to align them
