@@ -1,6 +1,30 @@
 from pathlib import Path
 import torch
 import os
+import threading
+import warnings
+
+# Monkey-patch Ultralytics Profile class to disable CUDA synchronization in multi-threading
+try:
+    from ultralytics.utils import ops
+    original_profile_time = ops.Profile.time
+    
+    def patched_profile_time(self):
+        """Patched time method that doesn't call torch.cuda.synchronize() in multi-threading."""
+        if self.cuda:
+            # Don't synchronize in multi-threaded environment
+            return time.time()
+        return original_profile_time(self)
+    
+    ops.Profile.time = patched_profile_time
+    print("✓ Ultralytics profiling patched for multi-GPU threading")
+except Exception as e:
+    print(f"Warning: Could not patch Ultralytics profiling: {e}")
+
+import time
+
+# Global lock for CUDA operations to prevent multi-threading issues
+_cuda_lock = threading.Lock()
 
 
 def load_yolo(which):
@@ -45,11 +69,22 @@ class YOLOv8Wrapper:
     
     def to(self, device):
         self.device_type = str(device)
+        # Set the device for this model
+        torch.cuda.set_device(device)
         self.model.to(device)
         return self
     
     def __call__(self, img):
-        results = self.model(img, verbose=False, device=self.device_type)
+        # Each thread has its own GPU - no lock needed
+        # The key is to disable model warmup and CUDA graphs which cause threading issues
+        results = self.model.predict(
+            img, 
+            verbose=False, 
+            device=self.device_type,
+            stream=False,
+            # Disable CUDA graphs to prevent threading issues
+            half=False,  # Disable FP16 which can trigger CUDA graphs
+        )
         return YOLOv8Results(results[0])
 
 

@@ -56,7 +56,7 @@ DEFAULT_FPS = 30
 DEFAULT_RESOLUTION = (640, 480)  # ESP32-CAM typical resolution
 
 # 🔍 DEBUG: Show frame index overlay on video
-SHOW_FRAME_ID = True  # Set to False to disable frame index overlay
+SHOW_FRAME_ID = False  # Set to False to disable frame index overlay
 
 # Global video capture (to simulate persistent camera)
 current_video_path: Optional[Path] = None

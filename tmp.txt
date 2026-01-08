@@ -2,3 +2,23 @@ export PATH="$HOME/.pyenv/bin:$PATH"
 
 
 YES, I LOVE idea using tab symbol to align them
+
+
+(ldm) vund@mmlab-SYS-420GP-TNR:/mnt/mmlab2024nas/vund/.svn/bin/vehicle_mtmc$ nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits
+0, NVIDIA RTX A4000, 100, 15782, 16376
+1, NVIDIA RTX A4000, 79, 4706, 16376
+2, NVIDIA RTX A5000, 2, 1331, 24564
+3, Tesla P100-PCIE-12GB, 0, 261, 12288
+
+
+
+export TRT_PATH=/home/vund/.local/lib/python3.8/site-packages/tensorrt_libs
+export NV_PATH=/opt/miniconda3/envs/ldm/lib/python3.8/site-packages/nvidia
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$TRT_PATH:$NV_PATH/cublas/lib:$NV_PATH/cudnn/lib
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/vund/.local/lib/python3.8/site-packages/tensorrt_libs
+
+TRT_PATH=/home/vund/.local/lib/python3.8/site-packages/tensorrt_libs \
+NV_PATH=/opt/miniconda3/envs/ldm/lib/python3.8/site-packages/nvidia \
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$TRT_PATH:$NV_PATH/cublas/lib:$NV_PATH/cudnn/lib \
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/vund/.local/lib/python3.8/site-packages/tensorrt_libs \
+python -u mtmc/run_live_mtmc.py --config examples/live_parking.yaml

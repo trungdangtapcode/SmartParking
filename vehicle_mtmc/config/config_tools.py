@@ -4,6 +4,9 @@ from yacs.config import CfgNode as CN
 def get_abspath(path: str, project_root: str):
     if path is None:
         return None
+    # Don't modify HTTP/HTTPS URLs
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
     if os.path.isabs(path):
         return path
     return os.path.normpath(os.path.join(project_root, path))

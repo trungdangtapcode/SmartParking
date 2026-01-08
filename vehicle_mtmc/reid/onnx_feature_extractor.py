@@ -17,17 +17,10 @@ class ONNXFeatureExtractor:
         
         self.input_size = (128, 256)  # width, height
         
-        # Setup ONNX Runtime session with TensorRT
+        # Setup ONNX Runtime session with CUDA (skip TensorRT for threading compatibility)
         providers = []
         if use_gpu:
-            # Try TensorRT first (fastest)
-            if 'TensorrtExecutionProvider' in ort.get_available_providers():
-                providers.append(('TensorrtExecutionProvider', {
-                    'trt_fp16_enable': True,
-                    'trt_engine_cache_enable': True,
-                    'trt_engine_cache_path': './trt_cache',
-                }))
-            # Fallback to CUDA
+            # Use CUDA directly - TensorRT can cause issues with threading
             if 'CUDAExecutionProvider' in ort.get_available_providers():
                 providers.append('CUDAExecutionProvider')
         providers.append('CPUExecutionProvider')

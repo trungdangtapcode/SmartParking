@@ -18,6 +18,7 @@ export interface ParkingLot {
   
   // Cameras
   cameras: string[];             // ["CAM001", "CAM002", "CAM003"]
+  barrierCamera?: string | null; // Camera ID đóng vai trò barrier (entry/exit detection)
   
   // Metadata
   createdAt: Timestamp;

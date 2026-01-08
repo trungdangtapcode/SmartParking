@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { createStreamSession, updateStreamSessionStatus } from '../services/streamService';
-import { getParkingLotsByOwner, addCameraToParkingLot, removeCameraFromParkingLot, getParkingLot } from '../services/parkingLotService';
+import { getParkingLotsByOwner, addCameraToParkingLot, removeCameraFromParkingLot, getParkingLot, setBarrierCamera, removeBarrierCamera } from '../services/parkingLotService';
 import { 
   getUserESP32Configs,
   type ESP32Config 
@@ -516,6 +516,7 @@ export function MultiStreamHostPage() {
   const [existingCameras, setExistingCameras] = useState<string[]>([]);
   const [loadingCameras, setLoadingCameras] = useState(false);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
+  const [barrierCamera, setBarrierCameraState] = useState<string | null>(null);
 
   // Load ESP32 cameras from saved configs
   useEffect(() => {
@@ -569,6 +570,7 @@ export function MultiStreamHostPage() {
   const loadCameras = async () => {
     if (!parkingLotId.trim()) {
       setExistingCameras([]);
+      setBarrierCameraState(null);
       return;
     }
     
@@ -578,13 +580,16 @@ export function MultiStreamHostPage() {
       if (lot) {
         console.log(`[MultiStreamHost] Loaded cameras for ${parkingLotId}:`, lot.cameras);
         setExistingCameras(lot.cameras || []);
+        setBarrierCameraState(lot.barrierCamera || null);
         setCamerasLoaded(true);
       } else {
         setExistingCameras([]);
+        setBarrierCameraState(null);
       }
     } catch (err) {
       console.error('[MultiStreamHost] Failed to load cameras:', err);
       setExistingCameras([]);
+      setBarrierCameraState(null);
     } finally {
       setLoadingCameras(false);
     }
@@ -657,6 +662,10 @@ export function MultiStreamHostPage() {
         console.log(`[MultiStreamHost] ✅ Camera ${cameraIdToRemove} removed from parking lot ${parkingLotId}`);
         // Update local state only - no Firebase read
         setExistingCameras(prev => prev.filter(cam => cam !== cameraIdToRemove));
+        // If this was the barrier camera, clear it
+        if (barrierCamera === cameraIdToRemove) {
+          setBarrierCameraState(null);
+        }
         alert(`✅ Đã xóa camera "${cameraIdToRemove}" thành công!`);
       } else {
         console.warn(`[MultiStreamHost] ⚠️ Failed to remove camera:`, result.error);
@@ -665,6 +674,39 @@ export function MultiStreamHostPage() {
     } catch (error) {
       console.error(`[MultiStreamHost] ❌ Error removing camera:`, error);
       alert(`❌ Lỗi khi xóa camera: ${error}`);
+    }
+  };
+
+  const handleToggleBarrierCamera = async (cameraId: string) => {
+    if (!parkingLotId.trim()) return;
+    
+    try {
+      // If this camera is already the barrier camera, remove the designation
+      if (barrierCamera === cameraId) {
+        const result = await removeBarrierCamera(parkingLotId.trim());
+        if (result.success) {
+          console.log(`[MultiStreamHost] ✅ Removed barrier camera designation from ${cameraId}`);
+          setBarrierCameraState(null);
+          alert(`✅ Đã bỏ đánh dấu camera "${cameraId}" là Barrier Camera!`);
+        } else {
+          console.warn(`[MultiStreamHost] ⚠️ Failed to remove barrier camera:`, result.error);
+          alert(`⚠️ Không thể bỏ đánh dấu: ${result.error}`);
+        }
+      } else {
+        // Set this camera as the barrier camera
+        const result = await setBarrierCamera(parkingLotId.trim(), cameraId);
+        if (result.success) {
+          console.log(`[MultiStreamHost] ✅ Set ${cameraId} as barrier camera`);
+          setBarrierCameraState(cameraId);
+          alert(`✅ Đã đánh dấu camera "${cameraId}" là Barrier Camera!`);
+        } else {
+          console.warn(`[MultiStreamHost] ⚠️ Failed to set barrier camera:`, result.error);
+          alert(`⚠️ Không thể đánh dấu: ${result.error}`);
+        }
+      }
+    } catch (error) {
+      console.error(`[MultiStreamHost] ❌ Error toggling barrier camera:`, error);
+      alert(`❌ Lỗi khi thay đổi barrier camera: ${error}`);
     }
   };
 
@@ -896,33 +938,75 @@ export function MultiStreamHostPage() {
               Chưa có camera nào trong parking lot này.
             </div>
           ) : camerasLoaded ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3">
               {existingCameras.map((cam) => (
                 <div
                   key={cam}
-                  className="flex items-center justify-between p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg hover:shadow-md transition"
+                  className={`flex items-center justify-between p-4 border-2 rounded-lg transition ${
+                    barrierCamera === cam
+                      ? 'bg-gradient-to-r from-red-50 to-orange-50 border-red-300 shadow-md'
+                      : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 hover:shadow-md'
+                  }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl">📹</span>
-                    <span className="font-semibold text-gray-800">{cam}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">{barrierCamera === cam ? '🚧' : '📹'}</span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-gray-800 text-lg">{cam}</span>
+                        {barrierCamera === cam && (
+                          <span className="px-2 py-0.5 bg-red-600 text-white text-xs font-bold rounded-full">
+                            BARRIER
+                          </span>
+                        )}
+                      </div>
+                      {barrierCamera === cam && (
+                        <p className="text-xs text-red-700 mt-0.5">
+                          Camera giám sát lối vào/ra (entry/exit detection)
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <button
-                    onClick={() => handleRemoveCamera(cam)}
-                    className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition"
-                    title="Xóa camera khỏi parking lot"
-                  >
-                    🗑️ Xóa
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleToggleBarrierCamera(cam)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
+                        barrierCamera === cam
+                          ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                          : 'bg-red-500 hover:bg-red-600 text-white'
+                      }`}
+                      title={barrierCamera === cam ? 'Bỏ đánh dấu Barrier Camera' : 'Đánh dấu là Barrier Camera'}
+                    >
+                      {barrierCamera === cam ? '🚧 Bỏ Barrier' : '🚧 Đặt Barrier'}
+                    </button>
+                    <button
+                      onClick={() => handleRemoveCamera(cam)}
+                      className="px-3 py-1.5 bg-gray-500 hover:bg-gray-600 text-white text-xs font-semibold rounded-lg transition"
+                      title="Xóa camera khỏi parking lot"
+                    >
+                      🗑️ Xóa
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           ) : null}
           
-          <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <p className="text-xs text-yellow-800">
+          <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <p className="text-xs text-yellow-800 mb-2">
               <strong>⚠️ Lưu ý:</strong> Xóa camera khỏi parking lot sẽ không xóa stream đang chạy. 
               Bạn cần dừng stream host tile bên dưới nếu muốn. Click "🔄 Tải danh sách" để refresh sau khi thêm/xóa camera.
             </p>
+          </div>
+          
+          <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-xs text-red-800 mb-1">
+              <strong>🚧 Barrier Camera:</strong> Camera đặc biệt dùng để phát hiện xe ra/vào bãi đỗ.
+            </p>
+            <ul className="text-xs text-red-700 ml-4 space-y-0.5">
+              <li>• Mỗi parking lot chỉ có 1 barrier camera</li>
+              <li>• Dùng để vẽ vùng barrier (Barrier Box) tại trang 🚧 Barrier Box Editor</li>
+              <li>• Giúp hệ thống tracking phát hiện xe vào/ra qua vùng barrier</li>
+            </ul>
           </div>
         </div>
       )}

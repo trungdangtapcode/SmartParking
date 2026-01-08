@@ -1,14 +1,12 @@
-OUTPUT_DIR: "output/live_parking"
+OUTPUT_DIR: "output/live_single"
 DEBUG_RUN: false
 FONTSIZE: 11
-SYSTEM:
-  GPU_IDS: [0, 2, 3]
 MOT:
   REID_MODEL_OPTS: "checkpoint/models/resnet50_mixstyle/opts.yaml"
   REID_BATCHSIZE: 16
-  DETECTOR: "checkpoint/yolov8s_car_custom.pt"
+  DETECTOR: "yolov8s"
   TRACKER: "bytetrack_iou"
-  TRACKED_CLASSES: [0]
+  TRACKED_CLASSES: [2, 5, 7]
   MIN_FRAMES: 1
   SHOW: false
   VIDEO_OUTPUT: false
@@ -17,22 +15,14 @@ MOT:
 MTMC:
   CAMERA_LAYOUT: 'config/examples/parking_camera_layout.txt'
   LINKAGE: 'average'
-  MIN_SIM: 0.6  # Increased from 0.5 to reduce false cross-camera matches
+  MIN_SIM: 0.5
 EXPRESS:
   FINAL_VIDEO_OUTPUT: false
   CAMERAS:
     - "video": "../ESP32/videos/parking_a.mp4"
       "name": "cam_a"
       "detector": "yolov8s"
-      "tracked_classes": [1, 2, 3, 5, 7]
-    - "video": "../ESP32/videos/parking_b.mp4"
-      "name": "cam_b"
-      "detector": "checkpoint/yolov8s_car_custom"
-      "tracked_classes": [0]
-    - "video": "../ESP32/videos/parking_c_plus1_fixed.mp4"
-      "name": "cam_c"
-      "detector": "checkpoint/yolov8s_car_custom"
-      "tracked_classes": [0]
+      "tracked_classes": [2, 5, 7]
 LIVE:
   TARGET_FPS: 8
   MJPEG_PORT: 8169
@@ -43,5 +33,5 @@ LIVE:
   SLEEP_ON_EMPTY: 0.02
   MAX_SKEW_TICKS: 1
   STALL_SECONDS: 5.0
-  MIN_TRACK_FRAMES: 3  # Reduced from 5 to allow shorter tracks
-  CLUSTER_INTERVAL: 5.0  # Reduced from 10 to update global IDs more frequently
+  MIN_TRACK_FRAMES: 5
+  CLUSTER_INTERVAL: 10.0

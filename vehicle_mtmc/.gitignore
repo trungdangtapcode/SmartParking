@@ -14,3 +14,7 @@ mot/deep_sort_orig/
 __py*
 .venv
 .jedi
+
+checkpoint/
+trt_cache/
+trt_cache/*

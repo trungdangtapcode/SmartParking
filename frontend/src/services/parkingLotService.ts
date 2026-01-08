@@ -331,3 +331,57 @@ export async function getParkingLotStats(parkingId: string) {
   };
 }
 
+/**
+ * Set a camera as the barrier camera for a parking lot
+ * Only one barrier camera is allowed per parking lot
+ */
+export async function setBarrierCamera(
+  parkingId: string,
+  cameraId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!db) {
+      throw new Error('Firestore database is not initialized.');
+    }
+
+    const docRef = doc(db, PARKING_LOTS_COLLECTION, parkingId);
+    await updateDoc(docRef, {
+      barrierCamera: cameraId,
+      updatedAt: Timestamp.now(),
+    });
+
+    console.log(`✅ Set barrier camera ${cameraId} for parking lot ${parkingId}`);
+    return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('❌ Failed to set barrier camera:', errorMessage);
+    return { success: false, error: errorMessage };
+  }
+}
+
+/**
+ * Remove barrier camera designation from a parking lot
+ */
+export async function removeBarrierCamera(
+  parkingId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!db) {
+      throw new Error('Firestore database is not initialized.');
+    }
+
+    const docRef = doc(db, PARKING_LOTS_COLLECTION, parkingId);
+    await updateDoc(docRef, {
+      barrierCamera: null,
+      updatedAt: Timestamp.now(),
+    });
+
+    console.log(`✅ Removed barrier camera for parking lot ${parkingId}`);
+    return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('❌ Failed to remove barrier camera:', errorMessage);
+    return { success: false, error: errorMessage };
+  }
+}
+

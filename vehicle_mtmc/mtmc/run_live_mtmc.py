@@ -8,6 +8,10 @@ import numpy as np
 import torch
 from yacs.config import CfgNode
 
+# Set environment variables to prevent CUDA multi-threading issues
+os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+os.environ['TORCH_USE_CUDA_DSA'] = '1'
+
 import cv2
 from config.defaults import get_cfg_defaults
 from config.config_tools import expand_relative_paths
@@ -291,33 +295,83 @@ class LiveMOTWorker(threading.Thread):
         self.device = self._select_device(base_cfg)
         self.detector = load_yolo(cam_cfg.get("detector", base_cfg.MOT.DETECTOR)).to(self.device)
         self.tracked_classes = cam_cfg.get("tracked_classes", base_cfg.MOT.TRACKED_CLASSES)
-        self.tracker = ByteTrackerIOU(frame_rate=30)
+        
+        # Improved tracking parameters for parking lot scenarios
+        # Lower thresholds help maintain track continuity with stationary vehicles
+        self.tracker = ByteTrackerIOU(
+            frame_rate=base_cfg.LIVE.TARGET_FPS,
+            track_conf_thresh=0.3,        # Lower to maintain tracks with varying detection confidence
+            new_track_conf_thresh=0.5,    # Higher bar for creating new tracks (reduce false positives)
+            track_match_thresh=0.4,       # Lower IOU threshold (vehicles don't move much in parking)
+            lost_track_keep_seconds=10.0  # Keep tracks longer (vehicles may be temporarily occluded)
+        )
+        
         self.extractor = build_extractor(base_cfg, self.device)
         self.video_path = cam_cfg.get("video")
-        self.cap = cv2.VideoCapture(self.video_path)
+        
+        # Support both HTTP streams and video files
+        self.is_http_stream = self.video_path and self.video_path.startswith("http")
+        self.bad_source = False
+        
+        if self.is_http_stream:
+            log.info(f"Camera {self.name}: Using HTTP stream from {self.video_path}")
+            self.stream_bytes = b''
+            import urllib.request
+            self.stream = None
+            try:
+                self.stream = urllib.request.urlopen(self.video_path, timeout=10)
+            except Exception as e:
+                log.error(f"Camera {self.name}: Failed to open HTTP stream {self.video_path}: {e}")
+                self.bad_source = True
+        else:
+            if not self.video_path or not os.path.exists(self.video_path):
+                log.error(f"Camera {self.name}: video source missing at {self.video_path}")
+                self.bad_source = True
+            else:
+                self.cap = cv2.VideoCapture(self.video_path)
+                if not self.cap.isOpened():
+                    log.error(f"Camera {self.name}: cannot open video {self.video_path}")
+                    self.bad_source = True
+        
         self.target_interval = 1.0 / float(base_cfg.LIVE.TARGET_FPS)
-        self.min_confid = 0.05
+        self.min_confid = 0.25  # Increased from 0.05 to reduce false positives
         self.local_to_global: Dict[int, int] = {}
         self.gid_colors: Dict[int, Tuple[int, int, int]] = {}
         self.stop_event = threading.Event()
         self.frame_id = 0
         self.vclock = None
-        self.bad_source = False
-        if not self.video_path or not os.path.exists(self.video_path):
-            log.error(f"Camera {self.name}: video source missing at {self.video_path}")
-            self.bad_source = True
-        elif not self.cap.isOpened():
-            log.error(f"Camera {self.name}: cannot open video {self.video_path}")
-            self.bad_source = True
 
     def _select_device(self, cfg: CfgNode) -> torch.device:
         if len(cfg.SYSTEM.GPU_IDS) == 0:
             return torch.device("cpu")
-        gpu_id = min(map(int, cfg.SYSTEM.GPU_IDS))
+        
+        # Assign different GPUs to different cameras to avoid CUDA threading conflicts
+        available_gpus = list(map(int, cfg.SYSTEM.GPU_IDS))
+        gpu_id = available_gpus[self.cam_idx % len(available_gpus)]
+        
         if gpu_id >= torch.cuda.device_count():
             log.error("GPU id %s not available, falling back to CPU", gpu_id)
             return torch.device("cpu")
+        
+        log.info(f"Camera {self.cam_idx} assigned to GPU {gpu_id}")
         return torch.device(f"cuda:{gpu_id}")
+    
+    def _read_http_frame(self):
+        """Read a single frame from HTTP MJPEG stream."""
+        try:
+            # Read until we find JPEG start marker
+            while True:
+                self.stream_bytes += self.stream.read(1024)
+                a = self.stream_bytes.find(b'\xff\xd8')  # JPEG start
+                b = self.stream_bytes.find(b'\xff\xd9')  # JPEG end
+                if a != -1 and b != -1:
+                    jpg = self.stream_bytes[a:b+2]
+                    self.stream_bytes = self.stream_bytes[b+2:]
+                    frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    return True, frame
+        except Exception as e:
+            log.error(f"Camera {self.name}: Error reading HTTP stream: {e}")
+            return False, None
 
     def run(self):
         log.info("Starting camera %s", self.name)
@@ -330,9 +384,15 @@ class LiveMOTWorker(threading.Thread):
                 tick = self.vclock.wait_for_tick(self.name, self.frame_id)
                 if tick is None:
                     break
-                ret, frame = self.cap.read()
+                
+                # Read frame from HTTP stream or video file
+                if self.is_http_stream:
+                    ret, frame = self._read_http_frame()
+                else:
+                    ret, frame = self.cap.read()
+                
                 if not ret:
-                    if self.base_cfg.LIVE.LOOP_VIDEO:
+                    if not self.is_http_stream and self.base_cfg.LIVE.LOOP_VIDEO:
                         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         continue
                     log.info("Camera %s ended", self.name)
@@ -365,9 +425,15 @@ class LiveMOTWorker(threading.Thread):
 
         filtered = []
         for bbox, score, cl in zip(boxes_raw, scores_raw, classes_raw):
-            if score < self.min_confid or cl not in self.tracked_classes:
+            if score < self.min_confid:
+                continue
+            if cl not in self.tracked_classes:
                 continue
             filtered.append((bbox, score, cl))
+        
+        # Log tracking status every 30 frames
+        if self.frame_id % 30 == 0:
+            log.info(f"{self.name}: Frame {self.frame_id} - Detections: {len(filtered)}/{len(boxes_raw)}, Active tracks: {len(self.tracker.active_tracks)}")
 
         boxes_tlwh = [[int(x - w / 2), int(y - h / 2), w, h] for (x, y, w, h), _, _ in filtered]
         scores = [s for _, s, _ in filtered]
@@ -379,6 +445,7 @@ class LiveMOTWorker(threading.Thread):
 
         self.tracker.update(self.frame_id, detections, None, None)
         tracks = self.tracker.active_tracks
+        
         for trk in tracks:
             trk.compute_mean_feature()
         # update global IDs via clustering aggregator
@@ -413,7 +480,13 @@ class LiveMOTWorker(threading.Thread):
 
     def stop(self):
         self.stop_event.set()
-        self.cap.release()
+        if self.is_http_stream and self.stream:
+            try:
+                self.stream.close()
+            except:
+                pass
+        elif hasattr(self, 'cap'):
+            self.cap.release()
 
 
 def run_live(cfg: CfgNode):

@@ -1,0 +1,47 @@
+OUTPUT_DIR: "output/live_http_streams"
+DEBUG_RUN: false
+FONTSIZE: 11
+SYSTEM:
+  GPU_IDS: [0, 2, 3]
+
+MOT:
+  REID_MODEL_OPTS: "checkpoint/models/resnet50_mixstyle/opts.yaml"
+  REID_BATCHSIZE: 16
+  DETECTOR: "yolov8s"
+  TRACKER: "bytetrack_iou"
+  TRACKED_CLASSES: [2, 5, 7]  # car, bus, truck
+  MIN_FRAMES: 1
+  SHOW: false
+  VIDEO_OUTPUT: false
+  ONLINE_VIDEO_OUTPUT: false
+  REID_ONNX: "checkpoint/models/resnet50_mixstyle/model.onnx"
+
+MTMC:
+  CAMERA_LAYOUT: 'config/examples/parking_camera_layout.txt'
+  LINKAGE: 'average'
+  MIN_SIM: 0.5
+
+EXPRESS:
+  FINAL_VIDEO_OUTPUT: false
+  CAMERAS:
+    - "video": "http://localhost:5069/stream"
+      "name": "cam_1"
+      "detector": "yolov8s"
+      "tracked_classes": [2, 5, 7]
+    - "video": "http://localhost:5070/stream"
+      "name": "cam_2"
+      "detector": "yolov8s"
+      "tracked_classes": [2, 5, 7]
+
+LIVE:
+  TARGET_FPS: 10
+  MJPEG_PORT: 8169
+  SIMILARITY_THRESHOLD: 0.5
+  GLOBAL_FEATURE_EMA: 0.0
+  MAX_INACTIVE_SECS: 3.0
+  LOOP_VIDEO: false
+  SLEEP_ON_EMPTY: 0.02
+  MAX_SKEW_TICKS: 2
+  STALL_SECONDS: 10.0
+  MIN_TRACK_FRAMES: 3
+  CLUSTER_INTERVAL: 5.0

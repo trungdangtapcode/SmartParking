@@ -1,6 +1,4 @@
 wheel
-torch==1.13.0
-torchvision==0.14.0
 pytorch_metric_learning==1.2.0
 efficientnet_pytorch>=0.7.0
 pretrainedmodels>=0.7.4
@@ -24,3 +22,6 @@ cython_bbox
 onnx
 onnxruntime-gpu==1.16.3
 
+
+torch
+torchvision

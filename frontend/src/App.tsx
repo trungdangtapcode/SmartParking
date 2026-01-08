@@ -18,6 +18,7 @@ import { ParkingLotManagementPage } from './pages/ParkingLotManagementPage';
 import { ParkingSpaceEditorPage } from './pages/ParkingSpaceEditorPage';
 import { WorkerMonitorPage } from './pages/WorkerMonitorPage';
 import DetectionViewerPage from './pages/DetectionViewerPage';
+import { BarrierBoxEditorPage } from './pages/BarrierBoxEditorPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
 
@@ -287,6 +288,23 @@ function App() {
                 </NavLink>
               )}
 
+              {/* 11.8. Barrier Box Editor */}
+              {user && role === 'admin' && (
+                <NavLink
+                  to="/barrier-box"
+                  className={({ isActive }) =>
+                    `flex items-center ${sidebarOpen ? 'gap-3 px-4' : 'justify-center px-2'} py-3 rounded-lg font-medium transition-all ${
+                      isActive
+                        ? 'bg-red-200 text-red-900 border border-red-500 shadow-inner'
+                        : 'bg-white text-red-700 border border-red-100 hover:bg-red-50'
+                    }`
+                  }
+                >
+                  <span className="text-xl flex-shrink-0">🚧</span>
+                  {sidebarOpen && <span className="truncate">Barrier Box Editor</span>}
+                </NavLink>
+              )}
+
               {/* 12. Account */}
               {user && (
                 <NavLink
@@ -486,6 +504,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <DetectionViewerPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/barrier-box" 
+            element={
+              <ProtectedRoute roles={['admin']}>
+                <BarrierBoxEditorPage />
               </ProtectedRoute>
             } 
           />
