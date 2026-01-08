@@ -75,7 +75,7 @@ serviceAccountKey.json
 *-firebase-adminsdk-*.json
 
 # Test files
-test_*.py
-*_test.py
-tests/
+# test_*.py
+# *_test.py
+# tests/
 

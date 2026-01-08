@@ -22,8 +22,9 @@ import { useAuth } from '../context/AuthContext';
 interface LiveDetectionProps {
   videoElement: HTMLVideoElement | HTMLImageElement | null;
   onStreamReady?: (stream: MediaStream) => void;
-  sourceType: 'camera' | 'upload';
+  sourceType: 'camera' | 'upload' | 'capture';
   onMediaReady?: (element: HTMLVideoElement | HTMLImageElement) => void;
+  capturedImageUrl?: string;
 }
 
 type ParkingSpace = SavedSpace;
@@ -102,7 +103,7 @@ function DetectionImageWithBoxes({
   );
 }
 
-export function LiveDetection({ videoElement, onStreamReady, sourceType, onMediaReady }: LiveDetectionProps) {
+export function LiveDetection({ videoElement, onStreamReady, sourceType, onMediaReady, capturedImageUrl }: LiveDetectionProps) {
   const { user, role } = useAuth();
   const ownerId = user?.uid ?? null;
   const isAdmin = role === 'admin';
@@ -1011,6 +1012,22 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
             >
               {sourceType === 'camera' ? (
                 <LiveCamera onStreamReady={onStreamReady} />
+              ) : sourceType === 'capture' ? (
+                // Show captured image
+                capturedImageUrl ? (
+                  <img 
+                    src={capturedImageUrl} 
+                    alt="Captured" 
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-gray-400">
+                    <div className="text-center">
+                      <div className="text-4xl mb-2">📸</div>
+                      <div>Capture an image to start</div>
+                    </div>
+                  </div>
+                )
               ) : (
                 <MediaUpload onMediaReady={handleMediaReadyWithSize} />
               )}
@@ -1082,7 +1099,9 @@ export function LiveDetection({ videoElement, onStreamReady, sourceType, onMedia
           {/* Source Type */}
           <div className="bg-white p-3 shadow-sm border border-gray-200 text-center flex flex-col" style={{ borderRadius: '30px' }}>
             <div className="text-xs text-gray-600 mb-1">Input Source</div>
-            <div className="text-gray-800 font-bold capitalize text-sm">{sourceType === 'camera' ? '📹 Camera' : '📁 Upload'}</div>
+            <div className="text-gray-800 font-bold capitalize text-sm">
+              {sourceType === 'camera' ? '📹 Camera' : sourceType === 'capture' ? '📸 Capture' : '📁 Upload'}
+            </div>
           </div>
           
           {/* Status */}

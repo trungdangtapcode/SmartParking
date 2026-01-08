@@ -7,8 +7,8 @@ tracking:
   
   # ByteTrack Parameters
   bytetrack:
-    track_high_thresh: 0.5    # High confidence threshold for confirmed tracks (0.3-0.7)
-    track_low_thresh: 0.1     # Low confidence threshold for unconfirmed tracks (0.05-0.3)
+    track_high_thresh: 0.4    # High confidence threshold for confirmed tracks (0.3-0.7)
+    track_low_thresh: 0.08    # Low confidence threshold for unconfirmed tracks (0.05-0.3)
     new_track_thresh: 0.6     # Threshold to create new track (0.4-0.7)
     track_buffer: 30          # Number of frames to keep lost tracks (15-60)
     match_thresh: 0.8         # IOU threshold for matching (0.6-0.9)
@@ -21,7 +21,7 @@ tracking:
 # Detection Settings  
 detection:
   conf_threshold: 0.25        # Detection confidence threshold (0.1-0.9)
-  iou_threshold: 0.45         # NMS IOU threshold (0.3-0.7)
+  iou_threshold: 0.35         # NMS IOU threshold (0.3-0.7)
   max_det: 300                # Maximum detections per image
   
   # Class filtering (empty = all classes)

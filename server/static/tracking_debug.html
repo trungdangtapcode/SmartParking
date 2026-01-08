@@ -574,15 +574,20 @@
                 : '<span style="color: #999;">No active tracks</span>';
             document.getElementById('trackBadges').innerHTML = trackBadgesHTML;
             
-            // Update occupied/available space names
+            // Update occupied/available space names with plates
+            const occupiedSpaces = data.space_occupancy.filter(s => s.is_occupied);
             document.getElementById('occupiedSpaceNames').innerHTML = 
-                stats.occupied_space_names.length > 0
-                    ? stats.occupied_space_names.map(name => `<div class="detection-item">${name}</div>`).join('')
+                occupiedSpaces.length > 0
+                    ? occupiedSpaces.map(space => {
+                        const plate = space.vehicle_plate ? ` [${space.vehicle_plate}]` : '';
+                        return `<div class="detection-item">${space.space_name}${plate}</div>`;
+                    }).join('')
                     : '<p style="color: #999;">No occupied spaces</p>';
             
+            const availableSpaces = data.space_occupancy.filter(s => !s.is_occupied);
             document.getElementById('availableSpaceNames').innerHTML = 
-                stats.available_space_names.length > 0
-                    ? stats.available_space_names.map(name => `<div class="detection-item">${name}</div>`).join('')
+                availableSpaces.length > 0
+                    ? availableSpaces.map(space => `<div class="detection-item">${space.space_name}</div>`).join('')
                     : '<p style="color: #999;">No available spaces</p>';
             
             // Update detections list
@@ -598,12 +603,26 @@
                 detectionsHTML || '<p style="color: #999;">No detections yet</p>';
             
             // Update space grid
-            const spacesHTML = data.space_occupancy.map(space => `
-                <div class="space-item ${space.is_occupied ? 'occupied' : 'available'}">
-                    ${space.space_name}
-                    <br><small>${space.is_occupied ? 'Occupied' : 'Available'}</small>
-                </div>
-            `).join('');
+            const spacesHTML = data.space_occupancy.map(space => {
+                if (space.is_occupied && space.vehicle_plate) {
+                    // Show plate prominently for occupied spaces with plates
+                    return `
+                        <div class="space-item occupied">
+                            ${space.space_name}
+                            <br><strong style="font-size: 16px; color: #c62828;">🚗 ${space.vehicle_plate}</strong>
+                            <br><small>Occupied</small>
+                        </div>
+                    `;
+                } else {
+                    // Regular display for available or occupied without plate
+                    return `
+                        <div class="space-item ${space.is_occupied ? 'occupied' : 'available'}">
+                            ${space.space_name}
+                            <br><small>${space.is_occupied ? 'Occupied' : 'Available'}</small>
+                        </div>
+                    `;
+                }
+            }).join('');
             document.getElementById('spaceGrid').innerHTML = 
                 spacesHTML || '<p style="color: #999;">No spaces defined</p>';
             
@@ -707,6 +726,7 @@
                 if (occupiedSpaces.length > 0) {
                     occupiedSpaces.forEach(space => {
                         const vehicle = space.occupying_vehicle;
+                        const plateInfo = space.vehicle_plate ? `<br><span style="color: #4caf50; font-weight: bold;">🚗 Plate: ${space.vehicle_plate}</span>` : '';
                         html += `
                             <div style="padding: 12px; margin-bottom: 8px; background: #ffebee; border-left: 4px solid #f44336; border-radius: 4px;">
                                 <strong>${space.space_name}</strong> (${space.space_id.substring(0, 8)}...)
@@ -716,6 +736,7 @@
                                     ${vehicle.track_id ? `Track ID: ${vehicle.track_id} | ` : ''}
                                     IOU: ${(vehicle.iou * 100).toFixed(1)}%
                                 </span>
+                                ${plateInfo}
                             </div>
                         `;
                     });

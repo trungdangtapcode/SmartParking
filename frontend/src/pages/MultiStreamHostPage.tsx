@@ -21,6 +21,7 @@ interface HostTileConfig {
   id: string;
   parkingLotId: string;
   cameraId: string;
+  cameraName?: string;
 }
 
 interface HostTileProps extends HostTileConfig {
@@ -28,7 +29,7 @@ interface HostTileProps extends HostTileConfig {
   onRemove: (id: string) => void;
 }
 
-function StreamHostTile({ id, parkingLotId, cameraId, ownerId, onRemove }: HostTileProps) {
+function StreamHostTile({ id, parkingLotId, cameraId, cameraName, ownerId, onRemove }: HostTileProps) {
   const [status, setStatus] = useState<HostStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -408,7 +409,10 @@ function StreamHostTile({ id, parkingLotId, cameraId, ownerId, onRemove }: HostT
     <div className="bg-white rounded-xl shadow border border-gray-200 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
         <div>
-          <div className="text-xs uppercase tracking-wide text-gray-500">
+          <div className="text-sm font-semibold text-gray-800">
+            📹 {cameraName || cameraId}
+          </div>
+          <div className="text-xs text-gray-500">
             {parkingLotId} • {cameraId}
           </div>
           <div className="text-xs text-gray-400 truncate max-w-xs">
@@ -621,6 +625,10 @@ export function MultiStreamHostPage() {
     const cam = cameraId.trim();
     const id = `${lot}__${cam}__${Date.now()}`;
     
+    // Find camera name from availableESP32Cameras
+    const cameraConfig = availableESP32Cameras.find(c => c.id === cam);
+    const cameraName = cameraConfig?.name || cam;
+    
     // Add camera to parking lot immediately
     console.log(`[MultiStreamHost] Adding camera ${cam} to parking lot ${lot}...`);
     try {
@@ -643,7 +651,7 @@ export function MultiStreamHostPage() {
     setTiles((prev) => {
       const exists = prev.some((t) => t.parkingLotId === lot && t.cameraId === cam);
       if (exists) return prev;
-      return [...prev, { id, parkingLotId: lot, cameraId: cam }];
+      return [...prev, { id, parkingLotId: lot, cameraId: cam, cameraName }];
     });
   };
 
@@ -939,55 +947,63 @@ export function MultiStreamHostPage() {
             </div>
           ) : camerasLoaded ? (
             <div className="grid grid-cols-1 gap-3">
-              {existingCameras.map((cam) => (
-                <div
-                  key={cam}
-                  className={`flex items-center justify-between p-4 border-2 rounded-lg transition ${
-                    barrierCamera === cam
-                      ? 'bg-gradient-to-r from-red-50 to-orange-50 border-red-300 shadow-md'
-                      : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 hover:shadow-md'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-3xl">{barrierCamera === cam ? '🚧' : '📹'}</span>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-gray-800 text-lg">{cam}</span>
+              {existingCameras.map((cam) => {
+                const cameraConfig = availableESP32Cameras.find(c => c.id === cam);
+                const displayName = cameraConfig?.name || cam;
+                
+                return (
+                  <div
+                    key={cam}
+                    className={`flex items-center justify-between p-4 border-2 rounded-lg transition ${
+                      barrierCamera === cam
+                        ? 'bg-gradient-to-r from-red-50 to-orange-50 border-red-300 shadow-md'
+                        : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 hover:shadow-md'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">{barrierCamera === cam ? '🚧' : '📹'}</span>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-gray-800 text-lg">{displayName}</span>
+                          {barrierCamera === cam && (
+                            <span className="px-2 py-0.5 bg-red-600 text-white text-xs font-bold rounded-full">
+                              BARRIER
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {parkingLotId} • {cam}
+                        </p>
                         {barrierCamera === cam && (
-                          <span className="px-2 py-0.5 bg-red-600 text-white text-xs font-bold rounded-full">
-                            BARRIER
-                          </span>
+                          <p className="text-xs text-red-700 mt-0.5">
+                            Camera giám sát lối vào/ra (entry/exit detection)
+                          </p>
                         )}
                       </div>
-                      {barrierCamera === cam && (
-                        <p className="text-xs text-red-700 mt-0.5">
-                          Camera giám sát lối vào/ra (entry/exit detection)
-                        </p>
-                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleToggleBarrierCamera(cam)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
+                          barrierCamera === cam
+                            ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                            : 'bg-red-500 hover:bg-red-600 text-white'
+                        }`}
+                        title={barrierCamera === cam ? 'Bỏ đánh dấu Barrier Camera' : 'Đánh dấu là Barrier Camera'}
+                      >
+                        {barrierCamera === cam ? '🚧 Bỏ Barrier' : '🚧 Đặt Barrier'}
+                      </button>
+                      <button
+                        onClick={() => handleRemoveCamera(cam)}
+                        className="px-3 py-1.5 bg-gray-500 hover:bg-gray-600 text-white text-xs font-semibold rounded-lg transition"
+                        title="Xóa camera khỏi parking lot"
+                      >
+                        🗑️ Xóa
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleToggleBarrierCamera(cam)}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
-                        barrierCamera === cam
-                          ? 'bg-orange-500 hover:bg-orange-600 text-white'
-                          : 'bg-red-500 hover:bg-red-600 text-white'
-                      }`}
-                      title={barrierCamera === cam ? 'Bỏ đánh dấu Barrier Camera' : 'Đánh dấu là Barrier Camera'}
-                    >
-                      {barrierCamera === cam ? '🚧 Bỏ Barrier' : '🚧 Đặt Barrier'}
-                    </button>
-                    <button
-                      onClick={() => handleRemoveCamera(cam)}
-                      className="px-3 py-1.5 bg-gray-500 hover:bg-gray-600 text-white text-xs font-semibold rounded-lg transition"
-                      title="Xóa camera khỏi parking lot"
-                    >
-                      🗑️ Xóa
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : null}
           
@@ -1025,6 +1041,7 @@ export function MultiStreamHostPage() {
               id={tile.id}
               parkingLotId={tile.parkingLotId}
               cameraId={tile.cameraId}
+              cameraName={tile.cameraName}
               ownerId={ownerId}
               onRemove={(removeId) =>
                 setTiles((prev) => prev.filter((t) => t.id !== removeId))

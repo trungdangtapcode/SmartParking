@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { LiveDetection } from '../components/LiveDetection';
 import { MediaSourceSelector } from '../components/MediaSourceSelector';
+import { CameraCaptureSelector } from '../components/CameraCaptureSelector';
 import { aiDetection } from '../services/ai/aiDetection';
+import { useAuth } from '../context/AuthContext';
 
 export function SpaceDetectionPage() {
+  const { user } = useAuth();
   const [mediaElement, setMediaElement] = useState<HTMLVideoElement | HTMLImageElement | null>(null);
   const [modelLoaded, setModelLoaded] = useState(false);
   const [modelError, setModelError] = useState<string>('');
-  const [sourceType, setSourceType] = useState<'camera' | 'upload'>('upload');
+  const [sourceType, setSourceType] = useState<'camera' | 'upload' | 'capture'>('upload');
+  const [capturedImageUrl, setCapturedImageUrl] = useState<string>('');
   
   useEffect(() => {
     // Load AI model with error handling
@@ -39,9 +43,20 @@ export function SpaceDetectionPage() {
     setMediaElement(element);
   };
   
-  const handleSourceChange = (source: 'camera' | 'upload') => {
+  const handleSourceChange = (source: 'camera' | 'upload' | 'capture') => {
     setSourceType(source);
     setMediaElement(null); // Reset when switching
+    setCapturedImageUrl(''); // Clear captured image
+  };
+  
+  const handleCapture = (imageUrl: string) => {
+    setCapturedImageUrl(imageUrl);
+    // Create an image element from the captured URL
+    const img = new Image();
+    img.onload = () => {
+      setMediaElement(img);
+    };
+    img.src = imageUrl;
   };
   
   return (
@@ -68,13 +83,19 @@ export function SpaceDetectionPage() {
         </div>
       ) : (
         <>
-          {/* Source Selector - Hidden (not in design) */}
-          <div className="hidden">
-            <MediaSourceSelector 
-              selectedSource={sourceType}
-              onSourceChange={handleSourceChange}
+          {/* Source Selector */}
+          <MediaSourceSelector 
+            selectedSource={sourceType}
+            onSourceChange={handleSourceChange}
+          />
+          
+          {/* Camera Capture Component */}
+          {sourceType === 'capture' && user && (
+            <CameraCaptureSelector 
+              userId={user.uid}
+              onCapture={handleCapture}
             />
-          </div>
+          )}
           
           {/* Detection Component */}
           <LiveDetection 
@@ -82,6 +103,7 @@ export function SpaceDetectionPage() {
             onStreamReady={handleStreamReady}
             onMediaReady={handleMediaReady}
             sourceType={sourceType}
+            capturedImageUrl={capturedImageUrl}
           />
         </>
       )}

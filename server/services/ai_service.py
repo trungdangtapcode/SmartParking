@@ -135,6 +135,21 @@ class AIService:
         
         # Run ALPR prediction
         print(f"🔍 Running ALPR prediction on image shape: {frame.shape}")
+        
+        # # Try to enhance image quality for ALPR
+        # # Resize if too small
+        # h, w = frame.shape[:2]
+        # if w < 640 or h < 480:
+        #     scale = max(640 / w, 480 / h)
+        #     new_w, new_h = int(w * scale), int(h * scale)
+        #     frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+        #     print(f"📐 Resized frame to {new_w}x{new_h} for better ALPR accuracy")
+        
+        # # Apply slight sharpening to improve text recognition
+        # kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+        # frame = cv2.filter2D(frame, -1, kernel)
+        # print(f"✨ Applied sharpening filter")
+        
         results = self.alpr_model.predict(frame)
         print(f"📊 ALPR returned {len(results)} results")
         
@@ -143,45 +158,76 @@ class AIService:
         plates = []
         
         for idx, result in enumerate(results):
-            # Extract plate info
-            plate_text = getattr(result, "plate", "") or ""
-            confidence = getattr(result, "confidence", 0.0)
+            # fast-alpr returns ALPRResult with .detection and .ocr attributes
             detection = getattr(result, "detection", None)
+            ocr = getattr(result, "ocr", None)
             
-            print(f"  Result {idx}: plate='{plate_text}', confidence={confidence}")
+            # Extract plate text from OCR
+            plate_text = ""
+            confidence = 0.0
+            
+            if ocr:
+                plate_text = getattr(ocr, "text", "") or ""
+                confidence = getattr(ocr, "confidence", 0.0)
+            
+            # DEBUG: Print detailed info
+            print(f"  Result {idx}:")
+            if detection:
+                det_attrs = {k: str(getattr(detection, k))[:100] for k in dir(detection) if not k.startswith('_') and not callable(getattr(detection, k))}
+                print(f"    Detection: {det_attrs}")
+            if ocr:
+                ocr_attrs = {k: str(getattr(ocr, k))[:100] for k in dir(ocr) if not k.startswith('_') and not callable(getattr(ocr, k))}
+                print(f"    OCR: {ocr_attrs}")
             
             plate_text = plate_text.upper().strip()
             
-            # Skip empty plates
-            if not plate_text:
-                print(f"  ⚠️ Skipping empty plate text")
+            # Skip empty plates with low confidence
+            print('confidence', confidence)
+            if not plate_text or confidence < 0.4:
+                print(f"  ⚠️ Skipping: text='{plate_text}', confidence={confidence:.2f}")
                 continue
             
-            # Extract bbox
+            print(f"  ✅ Valid plate found: '{plate_text}' ({confidence:.2f})")
+            
+            # Extract bbox from detection
             bbox = [0, 0, 0, 0]
-            if detection and hasattr(detection, "box"):
-                box = detection.box
-                if len(box) == 4:
-                    x1, y1, x2, y2 = map(int, box)
-                    bbox = [x1, y1, x2 - x1, y2 - y1]  # [x, y, w, h]
+            x1, y1, x2, y2 = 0, 0, 0, 0
+            
+            if detection:
+                # fast-alpr detection should have bbox attribute
+                try:
+                    # Try different possible attribute names
+                    bbox_data = None
+                    for attr_name in ['bbox', 'box', 'xyxy', 'bounding_box']:
+                        if hasattr(detection, attr_name):
+                            bbox_data = getattr(detection, attr_name)
+                            if bbox_data is not None:
+                                print(f"    Found bbox via {attr_name}: {bbox_data}")
+                                break
                     
-                    # Draw green box
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (64, 255, 120), 3)
-                    
-                    # Draw label
-                    label = f"{plate_text} ({confidence * 100:.1f}%)"
-                    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
-                    text_y = max(y2 - 8, y1 + h + 8)
-                    cv2.rectangle(annotated, (x1, text_y - h - 8), (x1 + w + 12, text_y + 6), (64, 255, 120), -1)
-                    cv2.putText(
-                        annotated,
-                        label,
-                        (x1 + 6, text_y),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.75,
-                        (0, 40, 20),
-                        2,
-                    )
+                    if bbox_data and len(bbox_data) >= 4:
+                        x1, y1, x2, y2 = map(int, bbox_data[:4])
+                        bbox = [x1, y1, x2 - x1, y2 - y1]  # [x, y, w, h]
+                        
+                        # Draw green box
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (64, 255, 120), 3)
+                        
+                        # Draw label
+                        label = f"{plate_text} ({confidence * 100:.1f}%)"
+                        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
+                        text_y = max(y2 - 8, y1 + h + 8)
+                        cv2.rectangle(annotated, (x1, text_y - h - 8), (x1 + w + 12, text_y + 6), (64, 255, 120), -1)
+                        cv2.putText(
+                            annotated,
+                            label,
+                            (x1 + 6, text_y),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.75,
+                            (0, 40, 20),
+                            2,
+                        )
+                except Exception as e:
+                    print(f"    ⚠️ Error extracting bbox: {e}")
             
             plates.append({
                 "text": plate_text,

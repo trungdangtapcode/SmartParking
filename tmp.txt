@@ -17,8 +17,23 @@ export NV_PATH=/opt/miniconda3/envs/ldm/lib/python3.8/site-packages/nvidia
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$TRT_PATH:$NV_PATH/cublas/lib:$NV_PATH/cudnn/lib
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/vund/.local/lib/python3.8/site-packages/tensorrt_libs
 
+
+cd /mnt/mmlab2024nas/vund/.svn/bin/vehicle_mtmc && export PYTHONPATH=$(pwd) && eval "$(conda shell.bash hook)" && conda activate ldm
+
+
 TRT_PATH=/home/vund/.local/lib/python3.8/site-packages/tensorrt_libs \
 NV_PATH=/opt/miniconda3/envs/ldm/lib/python3.8/site-packages/nvidia \
 LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$TRT_PATH:$NV_PATH/cublas/lib:$NV_PATH/cudnn/lib \
 LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/vund/.local/lib/python3.8/site-packages/tensorrt_libs \
 python -u mtmc/run_live_mtmc.py --config examples/live_parking.yaml
+
+
+then in worker, I want if all cameras of a parking lot is active (that allow worker working) then that parking lot will be called "completed". If parking lot is "completed" then the worker will doing 
+
+
+
+
+🚗 Detected 2 plate(s):
+1. 51A12345 (89.5%)
+2. 59B67890 (92.3%)
+Tracked vehicles: 3

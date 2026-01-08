@@ -1,6 +1,6 @@
 interface MediaSourceSelectorProps {
-  selectedSource: 'camera' | 'upload';
-  onSourceChange: (source: 'camera' | 'upload') => void;
+  selectedSource: 'camera' | 'upload' | 'capture';
+  onSourceChange: (source: 'camera' | 'upload' | 'capture') => void;
 }
 
 export function MediaSourceSelector({ selectedSource, onSourceChange }: MediaSourceSelectorProps) {
@@ -18,6 +18,17 @@ export function MediaSourceSelector({ selectedSource, onSourceChange }: MediaSou
             }`}
           >
             📹 Live Camera
+          </button>
+          
+          <button
+            onClick={() => onSourceChange('capture')}
+            className={`py-2 px-4 rounded-lg font-medium transition-all text-sm ${
+              selectedSource === 'capture'
+                ? 'bg-blue-600 text-white shadow'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            📸 Capture
           </button>
           
           <button

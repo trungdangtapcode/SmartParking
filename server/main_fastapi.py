@@ -27,7 +27,7 @@ from services.stream_broadcaster import broadcast_manager
 from esp32_client import ESP32Client
 
 # Import routers
-from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams, detection_viewer, worker_detection_stream, worker_broadcast, detection_logs, tracking_debug
+from routers import health, user_config, streams, esp32, ai_detection, firebase, websocket_streams, detection_viewer, worker_detection_stream, worker_broadcast, detection_logs, tracking_debug, manual_alpr
 
 # Global instances
 ai_service = None
@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI):
     esp32.init_router(esp32_client)
     ai_detection.init_router(ai_service, firebase_service)
     firebase.init_router(firebase_service)
+    manual_alpr.init_router(firebase_service)  # Initialize manual ALPR with Firebase
     
     # ⚠️  NOTE: Parking monitor worker should run in SEPARATE PROCESS
     # Run: python parking_monitor_worker.py --fps 20
@@ -146,6 +147,7 @@ app.include_router(tracking_debug.router)  # Debug tracking information
 app.include_router(esp32.router)
 app.include_router(ai_detection.router)
 app.include_router(firebase.router)
+app.include_router(manual_alpr.router)  # Manual ALPR for admins
 
 if __name__ == "__main__":
     print("=" * 60)

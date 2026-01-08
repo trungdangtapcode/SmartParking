@@ -27,7 +27,7 @@ import uvicorn
 import cv2
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 import base64
 import time
 from datetime import datetime
@@ -71,7 +71,7 @@ EPOCH_START = 0  # Unix timestamp 0
 frame_lock = asyncio.Lock()  # Thread-safe access
 
 
-def get_time_synced_frame_index(total_frames: int, fps: float) -> tuple[int, float]:
+def get_time_synced_frame_index(total_frames: int, fps: float) -> Tuple[int, float]:
     """
     Calculate which frame to show based on current real-world time.
     
