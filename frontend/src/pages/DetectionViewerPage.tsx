@@ -178,15 +178,9 @@ export default function DetectionViewerPage() {
       return newMap;
     });
 
-    // If no worker is active, don't try to connect
-    if (!hasWorker || isStale) {
-      console.warn(`⚠️ No active worker for camera ${camera.name} - skipping WebSocket connection`);
-      updateStreamState(camera.id, { 
-        connectionStatus: 'error', 
-        workerActive: false 
-      });
-      return;
-    }
+    // FORCE CONNECT - ignore worker status check (like tracking_debug.html does)
+    console.log(`🎥 Camera ${camera.name}: workerActive=${hasWorker}, isStale=${isStale}`);
+    console.log(`📋 Camera ID: ${camera.id}`);
 
     // Connect to WebSocket for metadata updates (using DEBUG endpoint like tracking_debug.html)
     const wsUrl = `${API_BASE_URL.replace('http', 'ws')}/debug/ws/tracking/${camera.id}`;
